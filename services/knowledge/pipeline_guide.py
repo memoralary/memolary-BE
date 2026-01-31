@@ -243,12 +243,12 @@ print("\n" + "=" * 60)
 print("🔮 7단계: 다음 학습 노드 예측")
 print("=" * 60)
 
-if predictor and saved_nodes:
-    # 첫 번째 노드를 현재 학습한 노드로 가정
-    current_node = saved_nodes[0]
-    current_node_id = str(current_node.id)
+if predictor and graph_data.num_nodes > 0:
+    # graph_data에서 첫 번째 노드 사용
+    current_node_id = graph_data.node_ids[0]
+    current_title = graph_data.node_titles[0]
     
-    print(f"현재 학습한 노드: {current_node.title}")
+    print(f"현재 학습한 노드: {current_title}")
     print(f"\n추천 다음 학습 노드:")
     
     predictions = predictor.predict_next_nodes(
@@ -284,3 +284,4 @@ print(f"""
    2. 모델 저장: predictor.save('model.pt')
    3. API 엔드포인트 생성
 """)
+

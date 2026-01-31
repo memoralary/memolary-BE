@@ -672,6 +672,9 @@ class LinkPredictor:
         if self.model is None or self.graph_data is None:
             raise ValueError("모델이 학습되지 않았습니다.")
         
+        # 타입 안전 변환
+        current_node_id = str(current_node_id)
+        
         if current_node_id not in self.graph_data.id_to_idx:
             raise ValueError(f"노드 ID를 찾을 수 없습니다: {current_node_id}")
         
