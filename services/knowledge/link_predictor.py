@@ -81,25 +81,74 @@ class GraphDataLoader:
     def load_from_db(self) -> GraphData:
         """
         Django DB에서 노드와 엣지를 로드하여 GraphData 생성
+        
+        UUID 변환 오류가 있는 데이터는 무시하고 안전하게 로드합니다.
         """
-        from knowledge.models import KnowledgeNode, KnowledgeEdge
+        from django.db import connection
         
-        # 노드 로드
-        nodes = list(KnowledgeNode.objects.all())
+        # Raw SQL로 안전하게 노드 로드 (UUID 변환 오류 방지)
+        nodes_data = []
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT id, title, description, embedding, cluster_id 
+                    FROM knowledge_knowledgenode
+                """)
+                columns = [col[0] for col in cursor.description]
+                for row in cursor.fetchall():
+                    node_dict = dict(zip(columns, row))
+                    nodes_data.append(node_dict)
+        except Exception as e:
+            logger.error(f"노드 로드 실패: {e}")
+            return self._create_empty_graph()
         
-        if not nodes:
+        if not nodes_data:
             logger.warning("DB에 노드가 없습니다.")
             return self._create_empty_graph()
         
+        # 유효한 노드만 필터링
+        valid_nodes = []
+        for node in nodes_data:
+            try:
+                node_id = str(node['id']) if node['id'] else None
+                if node_id and node.get('title'):
+                    valid_nodes.append({
+                        'id': node_id,
+                        'title': node['title'],
+                        'description': node.get('description', ''),
+                        'embedding': node.get('embedding'),
+                    })
+            except Exception as e:
+                logger.warning(f"노드 파싱 스킵 (잘못된 형식): {e}")
+                continue
+        
+        if len(valid_nodes) < 2:
+            logger.warning(f"유효한 노드가 부족합니다 ({len(valid_nodes)}개). 최소 2개 필요.")
+            return self._create_empty_graph()
+        
+        logger.info(f"유효한 노드 {len(valid_nodes)}개 로드됨")
+        
         # ID -> 인덱스 매핑
-        node_ids = [str(node.id) for node in nodes]
-        node_titles = [node.title for node in nodes]
+        node_ids = [n['id'] for n in valid_nodes]
+        node_titles = [n['title'] for n in valid_nodes]
         id_to_idx = {nid: idx for idx, nid in enumerate(node_ids)}
         
         # 노드 임베딩 추출
+        import pickle
         embeddings = []
-        for node in nodes:
-            emb = node.get_embedding()
+        for node in valid_nodes:
+            emb_data = node.get('embedding')
+            emb = None
+            
+            if emb_data:
+                try:
+                    if isinstance(emb_data, bytes):
+                        emb = pickle.loads(emb_data)
+                    elif isinstance(emb_data, memoryview):
+                        emb = pickle.loads(bytes(emb_data))
+                except Exception as e:
+                    logger.debug(f"임베딩 로드 실패: {e}")
+            
             if emb is not None:
                 embeddings.append(emb)
             else:
@@ -110,11 +159,26 @@ class GraphDataLoader:
         
         x = torch.tensor(np.stack(embeddings), dtype=torch.float32)
         
-        # 엣지 로드
-        edges = list(KnowledgeEdge.objects.all())
+        # Raw SQL로 엣지 로드
+        edges_data = []
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT source_id, target_id, confidence 
+                    FROM knowledge_knowledgeedge
+                """)
+                for row in cursor.fetchall():
+                    edges_data.append({
+                        'source_id': str(row[0]) if row[0] else None,
+                        'target_id': str(row[1]) if row[1] else None,
+                        'confidence': float(row[2]) if row[2] else 1.0,
+                    })
+        except Exception as e:
+            logger.warning(f"엣지 로드 실패: {e}")
+            edges_data = []
         
-        if not edges:
-            logger.warning("DB에 엣지가 없습니다.")
+        if not edges_data:
+            logger.warning("DB에 엣지가 없습니다. 학습에는 최소 2개의 엣지가 필요합니다.")
             edge_index = torch.zeros((2, 0), dtype=torch.long)
             edge_attr = None
         else:
@@ -122,22 +186,31 @@ class GraphDataLoader:
             target_indices = []
             confidences = []
             
-            for edge in edges:
-                src_id = str(edge.source_id)
-                tgt_id = str(edge.target_id)
+            for edge in edges_data:
+                src_id = edge.get('source_id')
+                tgt_id = edge.get('target_id')
                 
-                if src_id in id_to_idx and tgt_id in id_to_idx:
+                if src_id and tgt_id and src_id in id_to_idx and tgt_id in id_to_idx:
                     source_indices.append(id_to_idx[src_id])
                     target_indices.append(id_to_idx[tgt_id])
-                    confidences.append(edge.confidence)
+                    confidences.append(edge.get('confidence', 1.0))
             
-            edge_index = torch.tensor(
-                [source_indices, target_indices],
-                dtype=torch.long
-            )
-            edge_attr = torch.tensor(confidences, dtype=torch.float32).unsqueeze(1)
+            if not source_indices:
+                logger.warning("유효한 엣지가 없습니다.")
+                edge_index = torch.zeros((2, 0), dtype=torch.long)
+                edge_attr = None
+            else:
+                edge_index = torch.tensor(
+                    [source_indices, target_indices],
+                    dtype=torch.long
+                )
+                edge_attr = torch.tensor(confidences, dtype=torch.float32).unsqueeze(1)
         
-        logger.info(f"그래프 로드 완료: {len(nodes)}개 노드, {edge_index.shape[1]}개 엣지")
+        logger.info(f"그래프 로드 완료: {len(valid_nodes)}개 노드, {edge_index.shape[1]}개 엣지")
+        
+        # 학습 가능 여부 확인
+        if edge_index.shape[1] < 2:
+            logger.warning("⚠️  엣지가 2개 미만이면 Link Prediction 학습이 어렵습니다.")
         
         return GraphData(
             x=x,
