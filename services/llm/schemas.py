@@ -5,6 +5,7 @@ LLM 응답 검증을 위한 Pydantic 스키마
 Pydantic 모델을 정의합니다.
 """
 
+import uuid
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
@@ -13,9 +14,14 @@ from pydantic import BaseModel, Field, field_validator
 # Knowledge Graph 관련 스키마
 # =============================================================================
 
+def generate_uuid() -> str:
+    """UUID 문자열 생성"""
+    return str(uuid.uuid4())
+
+
 class NodeSchema(BaseModel):
     """지식 그래프 노드 스키마"""
-    id: str = Field(..., description="노드의 고유 식별자")
+    id: str = Field(default_factory=generate_uuid, description="노드의 고유 식별자 (없으면 자동 생성)")
     title: str = Field(..., min_length=1, max_length=255, description="노드 제목")
     description: Optional[str] = Field(default="", description="노드 설명")
     tags: List[str] = Field(default_factory=list, description="태그 리스트")
