@@ -41,6 +41,23 @@ class KnowledgeNode(models.Model):
         help_text="노드 생성 시각"
     )
     
+    # 3D 시각화 좌표 (UMAP 등으로 생성)
+    x = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="3D 시각화 X 좌표"
+    )
+    y = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="3D 시각화 Y 좌표"
+    )
+    z = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="3D 시각화 Z 좌표"
+    )
+    
     # 추가 메타데이터 (선택적)
     tags = models.JSONField(
         default=list,
