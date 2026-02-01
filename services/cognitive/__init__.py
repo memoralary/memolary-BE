@@ -18,6 +18,10 @@ from services.cognitive.benchmark import (
     TimePointStats,
     DomainAnalysis,
     BenchmarkResult,
+    # 복습 스케줄링
+    calculate_next_review_hours,
+    ReviewSchedule,
+    ReviewScheduleCalculator,
 )
 
 __all__ = [
@@ -33,4 +37,8 @@ __all__ = [
     'TimePointStats',
     'DomainAnalysis',
     'BenchmarkResult',
+    # 복습 스케줄링
+    'calculate_next_review_hours',
+    'ReviewSchedule',
+    'ReviewScheduleCalculator',
 ]

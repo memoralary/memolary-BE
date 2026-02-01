@@ -85,6 +85,163 @@ class BenchmarkResult:
 
 
 # =============================================================================
+# 복습 스케줄 계산
+# =============================================================================
+
+def calculate_next_review_hours(k: float, target_retention: float) -> float:
+    """
+    목표 암기율을 만족하는 다음 복습 시점 계산
+    
+    에빙하우스 망각 곡선 공식:
+        R(t) = exp(-k * t)
+    
+    역산하여 t를 구함:
+        t = -ln(R_target) / k
+    
+    Args:
+        k: 망각 계수 (단위: 1/hour, k > 0)
+        target_retention: 목표 암기율 (0 < R < 1)
+        
+    Returns:
+        다음 복습까지의 시간 (hours)
+        
+    Raises:
+        ValueError: k <= 0 또는 target_retention이 (0, 1) 범위 밖일 경우
+        
+    Examples:
+        >>> calculate_next_review_hours(k=0.0213, target_retention=0.8)
+        10.48  # 약 10.5시간 후 복습
+        
+        >>> calculate_next_review_hours(k=0.132, target_retention=0.8)
+        1.69   # 약 1.7시간 후 복습
+    """
+    # 입력 검증
+    if k <= 0:
+        raise ValueError(f"망각 계수 k는 양수여야 합니다: k={k}")
+    
+    if not (0 < target_retention < 1):
+        raise ValueError(
+            f"목표 암기율은 0과 1 사이여야 합니다: target_retention={target_retention}"
+        )
+    
+    # t = -ln(R_target) / k
+    # ln(0.8) = -0.223, so t = 0.223 / k
+    t_next = -math.log(target_retention) / k
+    
+    return t_next
+
+
+@dataclass
+class ReviewSchedule:
+    """복습 스케줄 정보"""
+    target_retention: float           # 목표 암기율
+    cs_review_hours: float            # CS 도메인 복습 시점 (시간)
+    dialect_review_hours: float       # 사투리 도메인 복습 시점 (시간)
+    cs_review_datetime: Optional[datetime] = None    # CS 복습 시각
+    dialect_review_datetime: Optional[datetime] = None  # 사투리 복습 시각
+
+
+class ReviewScheduleCalculator:
+    """
+    복습 스케줄 계산기
+    
+    망각 곡선 기반으로 최적의 복습 시점을 계산합니다.
+    """
+    
+    # 기본 목표 암기율
+    DEFAULT_TARGET_RETENTION = 0.8
+    
+    # 암기율별 권장 복습 간격 임계값
+    RETENTION_THRESHOLDS = {
+        'high': 0.9,      # 높은 유지율 목표
+        'medium': 0.8,    # 중간 유지율 목표 (기본)
+        'low': 0.7,       # 낮은 유지율 허용
+    }
+    
+    def calculate_review_schedule(
+        self,
+        k_cs: float,
+        k_dialect: float,
+        target_retention: float = None,
+        from_time: datetime = None
+    ) -> ReviewSchedule:
+        """
+        도메인별 복습 스케줄 계산
+        
+        Args:
+            k_cs: CS 도메인 망각 계수
+            k_dialect: 사투리 도메인 망각 계수
+            target_retention: 목표 암기율 (기본: 0.8)
+            from_time: 기준 시간 (기본: 현재)
+            
+        Returns:
+            ReviewSchedule 객체
+        """
+        if target_retention is None:
+            target_retention = self.DEFAULT_TARGET_RETENTION
+        
+        if from_time is None:
+            from_time = timezone.now()
+        
+        # 각 도메인별 복습 시간 계산
+        cs_hours = calculate_next_review_hours(k_cs, target_retention)
+        dialect_hours = calculate_next_review_hours(k_dialect, target_retention)
+        
+        # 복습 시각 계산
+        cs_datetime = from_time + timedelta(hours=cs_hours)
+        dialect_datetime = from_time + timedelta(hours=dialect_hours)
+        
+        return ReviewSchedule(
+            target_retention=target_retention,
+            cs_review_hours=round(cs_hours, 2),
+            dialect_review_hours=round(dialect_hours, 2),
+            cs_review_datetime=cs_datetime,
+            dialect_review_datetime=dialect_datetime
+        )
+    
+    def calculate_multi_retention_schedules(
+        self,
+        k_cs: float,
+        k_dialect: float
+    ) -> Dict[str, ReviewSchedule]:
+        """
+        여러 목표 암기율에 대한 복습 스케줄 계산
+        
+        Returns:
+            {'high': ReviewSchedule, 'medium': ReviewSchedule, 'low': ReviewSchedule}
+        """
+        return {
+            level: self.calculate_review_schedule(k_cs, k_dialect, retention)
+            for level, retention in self.RETENTION_THRESHOLDS.items()
+        }
+    
+    def format_hours_to_human_readable(self, hours: float) -> str:
+        """
+        시간을 사람이 읽기 쉬운 형식으로 변환
+        
+        Examples:
+            0.5 -> "30분"
+            1.5 -> "1시간 30분"
+            25.0 -> "1일 1시간"
+        """
+        if hours < 1:
+            minutes = int(hours * 60)
+            return f"{minutes}분"
+        elif hours < 24:
+            h = int(hours)
+            m = int((hours - h) * 60)
+            if m > 0:
+                return f"{h}시간 {m}분"
+            return f"{h}시간"
+        else:
+            days = int(hours / 24)
+            remaining_hours = int(hours % 24)
+            if remaining_hours > 0:
+                return f"{days}일 {remaining_hours}시간"
+            return f"{days}일"
+
+
+# =============================================================================
 # 노드 선정 서비스
 # =============================================================================
 
@@ -617,16 +774,29 @@ class BenchmarkReporter:
     인지 특성 분석 관점의 서술적 리포트
     """
     
-    def generate_report(self, result: BenchmarkResult) -> Dict:
+    def generate_report(
+        self, 
+        result: BenchmarkResult, 
+        target_retention: float = 0.8
+    ) -> Dict:
         """
         분석 리포트 생성
         
         Args:
             result: BenchmarkResult
+            target_retention: 목표 암기율 (기본: 0.8)
             
         Returns:
             리포트 딕셔너리
         """
+        # 복습 스케줄 계산
+        schedule_calculator = ReviewScheduleCalculator()
+        review_schedule = schedule_calculator.calculate_review_schedule(
+            k_cs=result.cs_analysis.forgetting_k,
+            k_dialect=result.dialect_analysis.forgetting_k,
+            target_retention=target_retention
+        )
+        
         return {
             'summary': {
                 'user_id': result.user_id,
@@ -636,6 +806,18 @@ class BenchmarkReporter:
                 'domain_ratio': round(result.domain_forgetting_ratio, 2),
                 'overall_illusion': round(result.overall_illusion_avg, 3),
                 'recommendation': result.recommendation
+            },
+            # 복습 스케줄 (프론트엔드용)
+            'recommended_review_hours': {
+                'target_retention': target_retention,
+                'cs': review_schedule.cs_review_hours,
+                'dialect': review_schedule.dialect_review_hours,
+                'cs_human_readable': schedule_calculator.format_hours_to_human_readable(
+                    review_schedule.cs_review_hours
+                ),
+                'dialect_human_readable': schedule_calculator.format_hours_to_human_readable(
+                    review_schedule.dialect_review_hours
+                )
             },
             'cs_domain': self._format_domain_report(result.cs_analysis, "Computer Science"),
             'dialect_domain': self._format_domain_report(result.dialect_analysis, "경상도 사투리"),
