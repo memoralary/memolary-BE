@@ -9,6 +9,7 @@ from knowledge.views import (
     UniverseView,
     NodeListView,
     EdgeListView,
+    RecommendView,
 )
 
 urlpatterns = [
@@ -18,4 +19,7 @@ urlpatterns = [
     # CRUD
     path('nodes/', NodeListView.as_view(), name='node-list'),
     path('edges/', EdgeListView.as_view(), name='edge-list'),
+    
+    # Recommend (GNN Integration)
+    path('recommend/', RecommendView.as_view(), name='recommend'),
 ]
