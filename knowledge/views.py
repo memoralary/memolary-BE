@@ -324,3 +324,54 @@ class EdgeListView(APIView):
         } for e in edges]
         
         return Response({"count": len(data), "edges": data})
+
+
+# =============================================================================
+# Recommend API (Dummy for GNN Integration)
+# =============================================================================
+
+class RecommendView(APIView):
+    """
+    GET /api/v1/knowledge/recommend/
+    
+    GNN 모델 기반 지식 추천 API (더미 엔드포인트)
+    
+    Query Parameters:
+        - node_id (str, required): 추천 기준이 되는 노드 ID
+        - top_k (int, optional): 반환할 추천 개수 (기본값: 5)
+    
+    Returns:
+        {
+            "node_id": "<요청받은 node_id>",
+            "top_k": <정수로 파싱된 top_k>,
+            "recommended": []
+        }
+    """
+    
+    def get(self, request):
+        # 필수 파라미터: node_id
+        node_id = request.query_params.get('node_id')
+        
+        if not node_id:
+            return Response(
+                {"error": "node_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 선택 파라미터: top_k (기본값 5)
+        top_k_param = request.query_params.get('top_k', '5')
+        
+        try:
+            top_k = int(top_k_param)
+        except ValueError:
+            return Response(
+                {"error": "top_k must be a valid integer"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 더미 응답 반환 (실제 추천 로직은 추후 GNN 모델 연동 시 구현)
+        return Response({
+            "node_id": node_id,
+            "top_k": top_k,
+            "recommended": []
+        })
