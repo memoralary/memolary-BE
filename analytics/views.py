@@ -274,12 +274,20 @@ class BenchmarkAnalyzeView(APIView):
         {
             "user_id": "uuid",
             "cs_node_ids": ["uuid1", "uuid2", ...],
-            "dialect_node_ids": ["uuid1", "uuid2", ...]
+            "dialect_node_ids": ["uuid1", "uuid2", ...],
+            "target_retention": 0.8  # optional, 목표 암기율 (0 < R < 1)
         }
     
     Response:
         {
             "summary": {...},
+            "recommended_review_hours": {
+                "target_retention": 0.8,
+                "cs": 10.48,
+                "dialect": 1.69,
+                "cs_human_readable": "10시간 28분",
+                "dialect_human_readable": "1시간 41분"
+            },
             "cs_domain": {...},
             "dialect_domain": {...},
             "temporal_comparison": {...},
@@ -287,11 +295,15 @@ class BenchmarkAnalyzeView(APIView):
         }
     """
     
+    # 기본 목표 암기율
+    DEFAULT_TARGET_RETENTION = 0.8
+    
     def post(self, request):
         try:
             user_id = request.data.get('user_id')
             cs_node_ids = request.data.get('cs_node_ids', [])
             dialect_node_ids = request.data.get('dialect_node_ids', [])
+            target_retention = request.data.get('target_retention', self.DEFAULT_TARGET_RETENTION)
             
             if not user_id:
                 return Response(
@@ -305,6 +317,13 @@ class BenchmarkAnalyzeView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # target_retention 유효성 검증
+            if not (0 < target_retention < 1):
+                return Response(
+                    {"error": "target_retention must be between 0 and 1 (exclusive)"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             # 분석 실행
             benchmark = CognitiveBenchmark()
             analysis_result = benchmark.analyze_results(
@@ -313,9 +332,12 @@ class BenchmarkAnalyzeView(APIView):
                 dialect_node_ids=dialect_node_ids
             )
             
-            # 리포트 생성
+            # 리포트 생성 (목표 암기율 전달)
             reporter = BenchmarkReporter()
-            report = reporter.generate_report(analysis_result)
+            report = reporter.generate_report(
+                analysis_result, 
+                target_retention=target_retention
+            )
             
             return Response(report, status=status.HTTP_200_OK)
             
