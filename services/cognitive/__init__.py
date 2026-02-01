@@ -22,6 +22,12 @@ from services.cognitive.benchmark import (
     calculate_next_review_hours,
     ReviewSchedule,
     ReviewScheduleCalculator,
+    # 망각곡선 시각화
+    calculate_retention,
+    generate_forgetting_curve,
+    ForgettingCurveData,
+    ForgettingCurveGenerator,
+    DEFAULT_CURVE_TIME_POINTS,
 )
 
 __all__ = [
@@ -41,4 +47,10 @@ __all__ = [
     'calculate_next_review_hours',
     'ReviewSchedule',
     'ReviewScheduleCalculator',
+    # 망각곡선 시각화
+    'calculate_retention',
+    'generate_forgetting_curve',
+    'ForgettingCurveData',
+    'ForgettingCurveGenerator',
+    'DEFAULT_CURVE_TIME_POINTS',
 ]

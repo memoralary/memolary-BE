@@ -242,6 +242,133 @@ class ReviewScheduleCalculator:
 
 
 # =============================================================================
+# 망각곡선 시각화 데이터 생성
+# =============================================================================
+
+# 기본 시간 샘플링 포인트 (시간 단위)
+DEFAULT_CURVE_TIME_POINTS = [0, 1, 3, 6, 12, 24, 48]
+
+
+def calculate_retention(k: float, t: float) -> float:
+    """
+    특정 시점의 기억 유지율 계산
+    
+    Ebbinghaus 망각 곡선: R(t) = exp(-k * t)
+    
+    Args:
+        k: 망각 계수 (1/hour)
+        t: 경과 시간 (hour)
+        
+    Returns:
+        기억 유지율 (0.0 ~ 1.0)
+    """
+    return math.exp(-k * t)
+
+
+def generate_forgetting_curve(
+    k: float, 
+    time_points: List[float] = None
+) -> List[Dict[str, float]]:
+    """
+    망각곡선 시각화용 좌표 데이터 생성
+    
+    프론트엔드에서 직접 그래프를 그릴 수 있도록
+    (t, retention) 좌표 배열을 생성합니다.
+    
+    Args:
+        k: 망각 계수 (1/hour)
+        time_points: 샘플링할 시간 포인트 리스트 (기본: [0,1,3,6,12,24,48])
+        
+    Returns:
+        [{"t": 0, "retention": 1.0}, {"t": 6, "retention": 0.89}, ...]
+        
+    Example:
+        >>> generate_forgetting_curve(k=0.01, time_points=[0, 6, 12, 24])
+        [
+            {"t": 0, "retention": 1.0},
+            {"t": 6, "retention": 0.942},
+            {"t": 12, "retention": 0.887},
+            {"t": 24, "retention": 0.787}
+        ]
+    """
+    if time_points is None:
+        time_points = DEFAULT_CURVE_TIME_POINTS
+    
+    curve_data = []
+    for t in time_points:
+        retention = calculate_retention(k, t)
+        curve_data.append({
+            "t": t,
+            "retention": round(retention, 3)
+        })
+    
+    return curve_data
+
+
+@dataclass
+class ForgettingCurveData:
+    """망각곡선 시각화 데이터"""
+    cs: List[Dict[str, float]]
+    dialect: List[Dict[str, float]]
+
+
+class ForgettingCurveGenerator:
+    """
+    망각곡선 시각화 데이터 생성기
+    
+    프론트엔드에서 수식을 알 필요 없이
+    바로 그래프를 렌더링할 수 있는 데이터를 제공합니다.
+    """
+    
+    def __init__(self, time_points: List[float] = None):
+        """
+        Args:
+            time_points: 커스텀 샘플링 시간 포인트
+        """
+        self.time_points = time_points or DEFAULT_CURVE_TIME_POINTS
+    
+    def generate(
+        self, 
+        k_cs: float, 
+        k_dialect: float
+    ) -> ForgettingCurveData:
+        """
+        도메인별 망각곡선 데이터 생성
+        
+        Args:
+            k_cs: CS 도메인 망각 계수
+            k_dialect: 사투리 도메인 망각 계수
+            
+        Returns:
+            ForgettingCurveData 객체
+        """
+        return ForgettingCurveData(
+            cs=generate_forgetting_curve(k_cs, self.time_points),
+            dialect=generate_forgetting_curve(k_dialect, self.time_points)
+        )
+    
+    def to_dict(
+        self, 
+        k_cs: float, 
+        k_dialect: float
+    ) -> Dict[str, List[Dict[str, float]]]:
+        """
+        JSON 직렬화 가능한 딕셔너리 반환
+        
+        Returns:
+            {
+                "cs": [{"t": 0, "retention": 1.0}, ...],
+                "dialect": [{"t": 0, "retention": 1.0}, ...]
+            }
+        """
+        data = self.generate(k_cs, k_dialect)
+        return {
+            "cs": data.cs,
+            "dialect": data.dialect
+        }
+
+
+# =============================================================================
 # 노드 선정 서비스
 # =============================================================================
 
@@ -782,6 +909,10 @@ class BenchmarkReporter:
         """
         분석 리포트 생성
         
+        프론트엔드에서 직접 사용할 수 있는 완전한 데이터 제공:
+        - forgetting_curve: 망각곡선 그래프용 좌표 데이터
+        - recommended_review: 복습 타이밍 시각화 정보
+        
         Args:
             result: BenchmarkResult
             target_retention: 목표 암기율 (기본: 0.8)
@@ -789,36 +920,61 @@ class BenchmarkReporter:
         Returns:
             리포트 딕셔너리
         """
+        k_cs = result.cs_analysis.forgetting_k
+        k_dialect = result.dialect_analysis.forgetting_k
+        
         # 복습 스케줄 계산
         schedule_calculator = ReviewScheduleCalculator()
         review_schedule = schedule_calculator.calculate_review_schedule(
-            k_cs=result.cs_analysis.forgetting_k,
-            k_dialect=result.dialect_analysis.forgetting_k,
+            k_cs=k_cs,
+            k_dialect=k_dialect,
             target_retention=target_retention
         )
+        
+        # 망각곡선 데이터 생성
+        curve_generator = ForgettingCurveGenerator()
+        forgetting_curve = curve_generator.to_dict(k_cs, k_dialect)
         
         return {
             'summary': {
                 'user_id': result.user_id,
                 'base_forgetting_k': round(result.base_forgetting_k, 4),
-                'k_cs': round(result.cs_analysis.forgetting_k, 4),
-                'k_dialect': round(result.dialect_analysis.forgetting_k, 4),
+                'k_cs': round(k_cs, 4),
+                'k_dialect': round(k_dialect, 4),
                 'domain_ratio': round(result.domain_forgetting_ratio, 2),
                 'overall_illusion': round(result.overall_illusion_avg, 3),
                 'recommendation': result.recommendation
             },
-            # 복습 스케줄 (프론트엔드용)
-            'recommended_review_hours': {
+            
+            # =========================================================
+            # 망각곡선 시각화 데이터 (프론트엔드 그래프용)
+            # =========================================================
+            'forgetting_curve': forgetting_curve,
+            
+            # =========================================================
+            # 복습 타이밍 시각화 정보
+            # =========================================================
+            'recommended_review': {
                 'target_retention': target_retention,
-                'cs': review_schedule.cs_review_hours,
-                'dialect': review_schedule.dialect_review_hours,
-                'cs_human_readable': schedule_calculator.format_hours_to_human_readable(
-                    review_schedule.cs_review_hours
-                ),
-                'dialect_human_readable': schedule_calculator.format_hours_to_human_readable(
-                    review_schedule.dialect_review_hours
-                )
+                'cs': {
+                    'hours': review_schedule.cs_review_hours,
+                    'label': schedule_calculator.format_hours_to_human_readable(
+                        review_schedule.cs_review_hours
+                    ),
+                    'curve_x': review_schedule.cs_review_hours  # 그래프 x좌표
+                },
+                'dialect': {
+                    'hours': review_schedule.dialect_review_hours,
+                    'label': schedule_calculator.format_hours_to_human_readable(
+                        review_schedule.dialect_review_hours
+                    ),
+                    'curve_x': review_schedule.dialect_review_hours  # 그래프 x좌표
+                }
             },
+            
+            # =========================================================
+            # 도메인별 상세 분석
+            # =========================================================
             'cs_domain': self._format_domain_report(result.cs_analysis, "Computer Science"),
             'dialect_domain': self._format_domain_report(result.dialect_analysis, "경상도 사투리"),
             'temporal_comparison': self._format_temporal_comparison(
