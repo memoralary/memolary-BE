@@ -14,6 +14,7 @@ import logging
 from typing import Optional
 
 from django.db import connection
+from django.core.exceptions import ValidationError
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -50,18 +51,27 @@ class IngestionView(APIView):
         file = serializer.validated_data.get('file')
         async_mode = serializer.validated_data.get('async_mode', True)
         
-        # 파일 처리
+        # 파일 처리 - 영구 저장
         file_path = None
         if file:
             ext = os.path.splitext(file.name)[1]
-            with tempfile.NamedTemporaryFile(
-                delete=False, 
-                suffix=ext,
-                dir='/tmp'
-            ) as tmp:
+            # 영구 저장 경로 설정
+            upload_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'media', 'uploads'
+            )
+            os.makedirs(upload_dir, exist_ok=True)
+            
+            # UUID 기반 고유 파일명 생성
+            unique_filename = f"{uuid.uuid4()}{ext}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            
+            # 파일 저장
+            with open(file_path, 'wb') as f:
                 for chunk in file.chunks():
-                    tmp.write(chunk)
-                file_path = tmp.name
+                    f.write(chunk)
+            
+            logger.info(f"[PDF_SAVE] 파일 저장 완료: {file_path} ({os.path.getsize(file_path)} bytes)")
         
         if async_mode:
             try:
@@ -327,14 +337,14 @@ class EdgeListView(APIView):
 
 
 # =============================================================================
-# Recommend API (Dummy for GNN Integration)
+# Recommend API (Edge-based Prerequisite Recommendation)
 # =============================================================================
 
 class RecommendView(APIView):
     """
     GET /api/v1/knowledge/recommend/
     
-    GNN 모델 기반 지식 추천 API (더미 엔드포인트)
+    지식 그래프 기반 추천 API
     
     Query Parameters:
         - node_id (str, required): 추천 기준이 되는 노드 ID
@@ -343,13 +353,23 @@ class RecommendView(APIView):
     Returns:
         {
             "node_id": "<요청받은 node_id>",
-            "top_k": <정수로 파싱된 top_k>,
-            "recommended": []
+            "top_k": <정수>,
+            "recommended": [
+                {"id": "...", "title": "...", "confidence": 0.9},
+                ...
+            ]
         }
+    
+    추천 기준:
+        - source_id=node_id인 outgoing edge 사용 (다음에 배울 개념)
+        - relation_type="prerequisite" 필터 적용
+        - confidence 내림차순 정렬
     """
     
     def get(self, request):
-        # 필수 파라미터: node_id
+        # =====================================================================
+        # Step 1: 파라미터 검증
+        # =====================================================================
         node_id = request.query_params.get('node_id')
         
         if not node_id:
@@ -358,7 +378,6 @@ class RecommendView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 선택 파라미터: top_k (기본값 5)
         top_k_param = request.query_params.get('top_k', '5')
         
         try:
@@ -369,9 +388,86 @@ class RecommendView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # 더미 응답 반환 (실제 추천 로직은 추후 GNN 모델 연동 시 구현)
+        # =====================================================================
+        # Step 2: 기준 노드 존재 확인
+        # =====================================================================
+        try:
+            source_node = KnowledgeNode.objects.get(id=node_id)
+            logger.info(f"[RECOMMEND] 기준 노드: {source_node.title} (id={node_id})")
+        except (KnowledgeNode.DoesNotExist, ValidationError, ValueError) as e:
+            # ValidationError/ValueError: invalid UUID format
+            # DoesNotExist: valid UUID but node doesn't exist
+            logger.warning(f"[RECOMMEND] 노드 조회 실패: {node_id} - {type(e).__name__}: {e}")
+            return Response(
+                {"error": f"invalid or not found node_id: {node_id}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # =====================================================================
+        # Step 3: Outgoing Edge 조회 (source_id = node_id)
+        # prerequisite 관계는 "다음에 배울 개념"을 의미
+        # =====================================================================
+        all_outgoing_edges = KnowledgeEdge.objects.filter(source_id=node_id)
+        outgoing_count = all_outgoing_edges.count()
+        logger.info(f"[RECOMMEND] Outgoing edge 전체: {outgoing_count}건")
+        
+        # =====================================================================
+        # Step 4: relation_type="prerequisite" 필터 적용
+        # =====================================================================
+        prerequisite_edges = all_outgoing_edges.filter(relation_type="prerequisite")
+        filtered_count = prerequisite_edges.count()
+        logger.info(f"[RECOMMEND] prerequisite 필터 후: {filtered_count}건")
+        
+        # =====================================================================
+        # Step 5: Self-reference 제외 + confidence 정렬
+        # - self-reference: source_id == target_id인 경우 제외
+        # - 정렬: confidence DESC, id ASC (안정 정렬)
+        # =====================================================================
+        edges_with_targets = prerequisite_edges.exclude(
+            target_id=node_id  # self-reference 명시적 제외
+        ).select_related('target').order_by('-confidence', 'id')
+        
+        # =====================================================================
+        # Step 6: 추천 결과 생성
+        # =====================================================================
+        recommended = []
+        for edge in edges_with_targets[:top_k]:
+            target_node = edge.target
+            confidence_val = float(edge.confidence) if edge.confidence is not None else 1.0
+            
+            recommended.append({
+                "id": str(target_node.id),
+                "title": target_node.title,
+                "confidence": confidence_val,
+            })
+            
+            # 디버깅: 각 추천 항목 로그
+            logger.info(
+                f"[RECOMMEND] 추천: {target_node.title} "
+                f"(id={target_node.id}, confidence={confidence_val})"
+            )
+        
+        # =====================================================================
+        # Step 7: 결과가 0개인 경우 원인 로그
+        # =====================================================================
+        if len(recommended) == 0:
+            if outgoing_count == 0:
+                logger.warning(f"[RECOMMEND] 추천 0건: outgoing edge 없음 (node_id={node_id})")
+            elif filtered_count == 0:
+                logger.warning(
+                    f"[RECOMMEND] 추천 0건: prerequisite 관계 없음 "
+                    f"(outgoing={outgoing_count}건, 모두 다른 relation_type)"
+                )
+            else:
+                logger.warning(
+                    f"[RECOMMEND] 추천 0건: self-reference만 존재 "
+                    f"(prerequisite={filtered_count}건)"
+                )
+        
+        logger.info(f"[RECOMMEND] 최종 추천: {[r['id'] for r in recommended]}")
+        
         return Response({
             "node_id": node_id,
             "top_k": top_k,
-            "recommended": []
+            "recommended": recommended
         })
