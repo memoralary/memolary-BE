@@ -13,6 +13,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+from drf_spectacular.types import OpenApiTypes
 
 from analytics.models import User, TestSession, TestResult, TestType
 from knowledge.models import KnowledgeNode
@@ -26,29 +28,55 @@ logger = logging.getLogger(__name__)
 
 
 class BenchmarkInitializeView(APIView):
-    """
-    벤치마크 초기화 API
+    """벤치마크 초기화 API"""
     
-    POST /api/benchmark/initialize
-    
-    Request Body:
-        {
-            "username": "test_user",
-            "nodes_per_domain": 10  # optional, default: 10
-        }
-    
-    Response:
-        {
-            "user_id": "uuid",
-            "sessions": {
-                "T0": {"id": "uuid", "scheduled_at": "..."},
-                ...
+    @extend_schema(
+        tags=['Analytics'],
+        summary="벤치마크 테스트 초기화",
+        description="""
+새로운 사용자의 인지 벤치마크 테스트 세션을 생성합니다.
+
+### 처리 과정
+1. 사용자 생성 또는 조회
+2. 도메인별(CS/사투리) 테스트 노드 할당
+3. 시간 포인트별(T0~T7) 세션 생성
+
+### 시간 포인트
+- T0: 직후
+- T1: 20분 후
+- T2: 1시간 후
+- T3: 9시간 후
+- T4: 1일 후
+- T5: 2일 후
+- T6: 6일 후
+- T7: 31일 후
+        """,
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'username': {'type': 'string', 'description': '사용자 이름 (필수)'},
+                    'nodes_per_domain': {'type': 'integer', 'default': 10, 'description': '도메인별 테스트 문항 수'},
+                },
+                'required': ['username']
+            }
+        },
+        responses={
+            201: {
+                'type': 'object',
+                'properties': {
+                    'user_id': {'type': 'string', 'format': 'uuid'},
+                    'username': {'type': 'string'},
+                    'created': {'type': 'boolean'},
+                    'sessions': {'type': 'object'},
+                    'cs_nodes': {'type': 'array'},
+                    'dialect_nodes': {'type': 'array'},
+                }
             },
-            "cs_nodes": [...],
-            "dialect_nodes": [...]
+            400: {'description': 'username 누락'},
+            500: {'description': '서버 오류'},
         }
-    """
-    
+    )
     def post(self, request):
         try:
             username = request.data.get('username')
@@ -119,44 +147,7 @@ class BenchmarkInitializeView(APIView):
 
 
 class BenchmarkSubmitView(APIView):
-    """
-    인지 상태 이벤트 수집 API (테스트 결과 제출)
-    
-    POST /api/benchmark/submit
-    
-    Request Body:
-        {
-            "session_id": "uuid",
-            "node_id": "uuid",
-            "recall_state": "REMEMBERED" | "FORGOT",  # 권장 (신규)
-            "is_correct": true/false,                 # deprecated (하위 호환용)
-            "confidence_score": 0.8,
-            "response_time_ms": 1500,
-            "test_type": "A1_BOTTOM_UP" | "A2_TOP_DOWN" | "B_RECALL",
-            "speech_data": {  # optional, for A2 only
-                "pause_count": 3,
-                "total_pause_duration": 2500,
-                "speech_segments": 5,
-                "text_length": 150
-            }
-        }
-    
-    recall_state 변환 규칙:
-        - "REMEMBERED" → is_correct = True
-        - "FORGOT" → is_correct = False
-    
-    Validation:
-        - recall_state와 is_correct 둘 다 없으면 에러
-        - recall_state가 있으면 is_correct를 자동 계산
-        - is_correct만 있으면 그대로 사용 (backward compatibility)
-    
-    Response:
-        {
-            "result_id": 1,
-            "illusion_score": 0.2,
-            "node_stability": 0.6
-        }
-    """
+    """인지 상태 이벤트 수집 API (테스트 결과 제출)"""
     
     # recall_state → is_correct 변환 매핑
     RECALL_STATE_MAPPING = {
@@ -164,6 +155,52 @@ class BenchmarkSubmitView(APIView):
         "FORGOT": False,
     }
     
+    @extend_schema(
+        tags=['Analytics'],
+        summary="테스트 결과 제출",
+        description="""
+사용자의 문제 풀이 결과를 수집합니다.
+
+### recall_state 필드 (권장)
+- `REMEMBERED`: 기억함 (is_correct = true)
+- `FORGOT`: 잊어버림 (is_correct = false)
+
+### test_type
+- `A1_BOTTOM_UP`: 상향식 테스트
+- `A2_TOP_DOWN`: 하향식 테스트
+- `B_RECALL`: 회상 테스트
+
+### 응답
+- `illusion_score`: 자신감 - 실제 정확도 (착각 지수)
+- `node_stability`: 노드 안정성 점수
+        """,
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'session_id': {'type': 'string', 'format': 'uuid', 'description': '세션 ID'},
+                    'node_id': {'type': 'string', 'format': 'uuid', 'description': '노드 ID'},
+                    'recall_state': {'type': 'string', 'enum': ['REMEMBERED', 'FORGOT'], 'description': '기억 상태'},
+                    'confidence_score': {'type': 'number', 'minimum': 0, 'maximum': 1, 'description': '확신도'},
+                    'response_time_ms': {'type': 'integer', 'description': '반응 시간 (ms)'},
+                    'test_type': {'type': 'string', 'enum': ['A1_BOTTOM_UP', 'A2_TOP_DOWN', 'B_RECALL']},
+                },
+                'required': ['session_id', 'node_id', 'recall_state', 'confidence_score', 'response_time_ms', 'test_type']
+            }
+        },
+        responses={
+            201: {
+                'type': 'object',
+                'properties': {
+                    'result_id': {'type': 'integer'},
+                    'illusion_score': {'type': 'number'},
+                    'node_stability': {'type': 'number'},
+                }
+            },
+            400: {'description': '잘못된 요청'},
+            404: {'description': '세션 또는 노드를 찾을 수 없음'},
+        }
+    )
     def post(self, request):
         try:
             session_id = request.data.get('session_id')
@@ -265,39 +302,74 @@ class BenchmarkSubmitView(APIView):
 
 
 class BenchmarkAnalyzeView(APIView):
-    """
-    벤치마크 분석 API
-    
-    POST /api/benchmark/analyze
-    
-    Request Body:
-        {
-            "user_id": "uuid",
-            "cs_node_ids": ["uuid1", "uuid2", ...],
-            "dialect_node_ids": ["uuid1", "uuid2", ...],
-            "target_retention": 0.8  # optional, 목표 암기율 (0 < R < 1)
-        }
-    
-    Response:
-        {
-            "summary": {...},
-            "recommended_review_hours": {
-                "target_retention": 0.8,
-                "cs": 10.48,
-                "dialect": 1.69,
-                "cs_human_readable": "10시간 28분",
-                "dialect_human_readable": "1시간 41분"
-            },
-            "cs_domain": {...},
-            "dialect_domain": {...},
-            "temporal_comparison": {...},
-            "cognitive_interpretation": {...}
-        }
-    """
+    """벤치마크 분석 API"""
     
     # 기본 목표 암기율
     DEFAULT_TARGET_RETENTION = 0.8
     
+    @extend_schema(
+        tags=['Analytics'],
+        summary="벤치마크 결과 분석",
+        description="""
+벤치마크 테스트 결과를 분석하여 사용자의 인지 특성을 파악합니다.
+
+### 분석 결과
+- **망각 계수 (k)**: 에빙하우스 망각곡선 기반 개인화된 망각 속도
+- **복습 스케줄**: 목표 암기율 유지를 위한 최적 복습 시점
+- **인지 해석**: 학습 유형 및 추천 전략
+
+### 응답 구조
+- `summary`: 전체 요약
+- `forgetting_curve`: 프론트엔드 시각화용 망각곡선 데이터
+- `recommended_review`: 도메인별 복습 시간 (hours, label, curve_x)
+- `cognitive_interpretation`: 인지 특성 해석
+        """,
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'user_id': {'type': 'string', 'format': 'uuid'},
+                    'cs_node_ids': {'type': 'array', 'items': {'type': 'string'}},
+                    'dialect_node_ids': {'type': 'array', 'items': {'type': 'string'}},
+                    'target_retention': {'type': 'number', 'minimum': 0, 'maximum': 1, 'default': 0.8},
+                },
+                'required': ['user_id', 'cs_node_ids', 'dialect_node_ids']
+            }
+        },
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'summary': {'type': 'object'},
+                    'forgetting_curve': {
+                        'type': 'object',
+                        'properties': {
+                            'cs': {'type': 'array'},
+                            'dialect': {'type': 'array'},
+                        }
+                    },
+                    'recommended_review': {
+                        'type': 'object',
+                        'properties': {
+                            'target_retention': {'type': 'number'},
+                            'cs': {
+                                'type': 'object',
+                                'properties': {
+                                    'hours': {'type': 'number'},
+                                    'label': {'type': 'string'},
+                                    'curve_x': {'type': 'number'},
+                                }
+                            },
+                            'dialect': {'type': 'object'},
+                        }
+                    },
+                    'cognitive_interpretation': {'type': 'object'},
+                }
+            },
+            400: {'description': '잘못된 요청'},
+            404: {'description': '사용자를 찾을 수 없음'},
+        }
+    )
     def post(self, request):
         try:
             user_id = request.data.get('user_id')
@@ -355,21 +427,42 @@ class BenchmarkAnalyzeView(APIView):
 
 
 class BenchmarkStatusView(APIView):
-    """
-    벤치마크 진행 상태 API
+    """벤치마크 진행 상태 API"""
     
-    GET /api/benchmark/status/{user_id}
-    
-    Response:
-        {
-            "user_id": "uuid",
-            "sessions": [...],
-            "completed_results": 40,
-            "total_expected": 80,
-            "progress_percent": 50
+    @extend_schema(
+        tags=['Analytics'],
+        summary="벤치마크 진행 상태 조회",
+        description="""
+사용자의 벤치마크 테스트 진행 상황을 조회합니다.
+
+### 응답 구조
+- `sessions`: 시간 포인트별 세션 정보
+- `completed_results`: 완료된 테스트 결과 수
+- `progress_percent`: 전체 진행률 (%)
+        """,
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                description='사용자 ID'
+            )
+        ],
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'user_id': {'type': 'string'},
+                    'username': {'type': 'string'},
+                    'sessions': {'type': 'array'},
+                    'completed_results': {'type': 'integer'},
+                    'total_expected': {'type': 'integer'},
+                    'progress_percent': {'type': 'number'},
+                }
+            },
+            404: {'description': '사용자를 찾을 수 없음'},
         }
-    """
-    
+    )
     def get(self, request, user_id):
         try:
             user = User.objects.get(id=user_id)

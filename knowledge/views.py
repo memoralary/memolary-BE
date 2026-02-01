@@ -19,6 +19,8 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+from drf_spectacular.types import OpenApiTypes
 
 from knowledge.models import KnowledgeNode, KnowledgeEdge
 from knowledge.serializers import IngestionRequestSerializer
@@ -38,6 +40,60 @@ class IngestionView(APIView):
     """
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="지식 데이터 수집 (Ingestion)",
+        description="""
+텍스트 또는 PDF 파일을 업로드하여 지식 그래프를 생성합니다.
+
+### 처리 과정
+1. 텍스트/PDF 청킹
+2. LLM 기반 노드 추출
+3. 클러스터링 및 좌표 할당
+4. 선수학습 관계(Edge) 생성
+
+### 비동기 모드 (기본)
+- Celery 태스크로 백그라운드 처리
+- `task_id`로 진행 상태 조회 가능
+
+### 동기 모드
+- `async_mode=false`로 즉시 처리
+- 대용량 파일의 경우 타임아웃 주의
+        """,
+        request={
+            'multipart/form-data': {
+                'type': 'object',
+                'properties': {
+                    'text': {'type': 'string', 'description': '처리할 텍스트 내용'},
+                    'file': {'type': 'string', 'format': 'binary', 'description': 'PDF 파일'},
+                    'async_mode': {'type': 'boolean', 'default': True, 'description': '비동기 처리 여부'},
+                },
+            }
+        },
+        responses={
+            202: OpenApiExample(
+                'Async Response',
+                value={
+                    'task_id': 'abc123-def456',
+                    'status': 'pending',
+                    'message': '작업이 시작되었습니다.'
+                },
+                description='비동기 모드: 태스크 ID 반환'
+            ),
+            200: OpenApiExample(
+                'Sync Response',
+                value={
+                    'status': 'completed',
+                    'nodes_created': 10,
+                    'edges_created': 15,
+                    'message': '완료: 10개 노드, 15개 엣지'
+                },
+                description='동기 모드: 처리 결과 즉시 반환'
+            ),
+            400: {'description': '잘못된 요청 (텍스트/파일 누락)'},
+            500: {'description': '서버 오류'},
+        }
+    )
     def post(self, request):
         serializer = IngestionRequestSerializer(data=request.data)
         
@@ -208,6 +264,39 @@ class IngestionView(APIView):
 class TaskStatusView(APIView):
     """GET /api/v1/tasks/<task_id>/"""
     
+    @extend_schema(
+        tags=['Tasks'],
+        summary="비동기 작업 상태 조회",
+        description="""
+Celery 비동기 작업의 현재 상태를 조회합니다.
+
+### 상태 값
+- `PENDING`: 대기 중
+- `PROGRESS`: 진행 중 (progress 필드에 상세 정보)
+- `SUCCESS`: 완료 (result 필드에 결과)
+- `FAILURE`: 실패 (error 필드에 오류 메시지)
+        """,
+        parameters=[
+            OpenApiParameter(
+                name='task_id',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.PATH,
+                description='Celery 태스크 ID'
+            )
+        ],
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'task_id': {'type': 'string'},
+                    'status': {'type': 'string', 'enum': ['PENDING', 'PROGRESS', 'SUCCESS', 'FAILURE']},
+                    'progress': {'type': 'object', 'description': '진행 정보 (PROGRESS 상태일 때)'},
+                    'result': {'type': 'object', 'description': '완료 결과 (SUCCESS 상태일 때)'},
+                    'error': {'type': 'string', 'description': '오류 메시지 (FAILURE 상태일 때)'},
+                }
+            }
+        }
+    )
     def get(self, request, task_id):
         try:
             from celery.result import AsyncResult
@@ -240,6 +329,69 @@ class TaskStatusView(APIView):
 class UniverseView(APIView):
     """GET /api/v1/universe/ - 은하수 시각화 데이터"""
     
+    @extend_schema(
+        tags=['Universe'],
+        summary="3D 시각화 데이터 조회",
+        description="""
+지식 그래프의 3D 시각화를 위한 전체 노드 및 엣지 데이터를 반환합니다.
+
+### 응답 구조
+- **nodes**: 노드 배열 (id, title, position, cluster_id 등)
+- **edges**: 엣지 배열 (source, target, relation_type, confidence)
+- **metadata**: 통계 정보 (총 노드 수, 엣지 수, 클러스터 목록)
+
+### 좌표 시스템
+- x, y, z 좌표는 클러스터 기반 3D 배치
+- 동일 클러스터 노드는 인접 배치
+        """,
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'nodes': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'id': {'type': 'string'},
+                                'title': {'type': 'string'},
+                                'description': {'type': 'string'},
+                                'cluster_id': {'type': 'integer'},
+                                'position': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'x': {'type': 'number'},
+                                        'y': {'type': 'number'},
+                                        'z': {'type': 'number'},
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'edges': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'source': {'type': 'string'},
+                                'target': {'type': 'string'},
+                                'relation_type': {'type': 'string'},
+                                'confidence': {'type': 'number'},
+                            }
+                        }
+                    },
+                    'metadata': {
+                        'type': 'object',
+                        'properties': {
+                            'total_nodes': {'type': 'integer'},
+                            'total_edges': {'type': 'integer'},
+                            'total_clusters': {'type': 'integer'},
+                        }
+                    }
+                }
+            }
+        }
+    )
     def get(self, request):
         nodes_data = []
         
@@ -303,6 +455,34 @@ class UniverseView(APIView):
 class NodeListView(APIView):
     """GET /api/v1/knowledge/nodes/"""
     
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="노드 목록 조회",
+        description="생성된 지식 노드 목록을 조회합니다 (최대 100개).",
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'count': {'type': 'integer', 'example': 10},
+                    'nodes': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'id': {'type': 'string', 'format': 'uuid'},
+                                'title': {'type': 'string'},
+                                'description': {'type': 'string'},
+                                'cluster_id': {'type': 'integer'},
+                                'x': {'type': 'number'},
+                                'y': {'type': 'number'},
+                                'z': {'type': 'number'},
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
     def get(self, request):
         nodes = KnowledgeNode.objects.all()[:100]
         
@@ -320,6 +500,34 @@ class NodeListView(APIView):
 class EdgeListView(APIView):
     """GET /api/v1/knowledge/edges/"""
     
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="엣지 목록 조회",
+        description="노드 간의 관계(엣지) 목록을 조회합니다 (최대 100개).",
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'count': {'type': 'integer', 'example': 15},
+                    'edges': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'id': {'type': 'string', 'format': 'uuid'},
+                                'source': {'type': 'string'},
+                                'target': {'type': 'string'},
+                                'source_title': {'type': 'string'},
+                                'target_title': {'type': 'string'},
+                                'relation_type': {'type': 'string'},
+                                'confidence': {'type': 'number'},
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
     def get(self, request):
         edges = KnowledgeEdge.objects.select_related('source', 'target').all()[:100]
         
@@ -345,27 +553,57 @@ class RecommendView(APIView):
     GET /api/v1/knowledge/recommend/
     
     지식 그래프 기반 추천 API
-    
-    Query Parameters:
-        - node_id (str, required): 추천 기준이 되는 노드 ID
-        - top_k (int, optional): 반환할 추천 개수 (기본값: 5)
-    
-    Returns:
-        {
-            "node_id": "<요청받은 node_id>",
-            "top_k": <정수>,
-            "recommended": [
-                {"id": "...", "title": "...", "confidence": 0.9},
-                ...
-            ]
-        }
-    
-    추천 기준:
-        - source_id=node_id인 outgoing edge 사용 (다음에 배울 개념)
-        - relation_type="prerequisite" 필터 적용
-        - confidence 내림차순 정렬
     """
     
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="다음 학습 추천",
+        description="""
+특정 노드를 기준으로 다음에 배울 개념을 추천합니다.
+
+### 추천 기준
+- 해당 노드에서 나가는 `prerequisite` 관계 사용
+- `confidence` 높은 순으로 정렬
+        """,
+        parameters=[
+            OpenApiParameter(
+                name='node_id',
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.QUERY,
+                description='추천 기준 노드 ID',
+                required=True
+            ),
+            OpenApiParameter(
+                name='top_k',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description='추천 개수',
+                default=5
+            ),
+        ],
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'node_id': {'type': 'string'},
+                    'top_k': {'type': 'integer'},
+                    'recommended': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'id': {'type': 'string'},
+                                'title': {'type': 'string'},
+                                'confidence': {'type': 'number'},
+                            }
+                        }
+                    }
+                }
+            },
+            400: {'description': 'node_id 누락 또는 잘못된 top_k'},
+            404: {'description': '노드를 찾을 수 없음'},
+        }
+    )
     def get(self, request):
         # =====================================================================
         # Step 1: 파라미터 검증

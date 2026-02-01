@@ -45,6 +45,9 @@ INSTALLED_APPS = [
     # 향후 API 개발을 위해 미리 추가
     'rest_framework',
     'corsheaders',
+    
+    # API 문서화
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -146,6 +149,41 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,
+    # Swagger 문서화
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+
+# =============================================================================
+# drf-spectacular (Swagger/OpenAPI) 설정
+# =============================================================================
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Memorylary API',
+    'DESCRIPTION': '''
+## 🧠 인지과학 기반 학습 시스템 API
+
+Memorylary는 에빙하우스 망각곡선을 기반으로 개인화된 복습 스케줄을 제공하는 학습 시스템입니다.
+
+### 주요 기능
+- **Knowledge Graph**: 지식 노드 추출 및 관계 분석
+- **Cognitive Benchmark**: 사용자 망각 계수 측정
+- **Review Scheduling**: 최적 복습 시점 계산
+
+### API 그룹
+- `/api/v1/knowledge/` - 지식 그래프 관리
+- `/api/v1/analytics/` - 인지 벤치마크 분석
+- `/api/v1/universe/` - 3D 시각화 데이터
+    ''',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'TAGS': [
+        {'name': 'Knowledge', 'description': '지식 그래프 생성 및 조회'},
+        {'name': 'Analytics', 'description': '인지 벤치마크 및 분석'},
+        {'name': 'Universe', 'description': '3D 시각화 데이터'},
+        {'name': 'Tasks', 'description': '비동기 작업 상태'},
+    ],
 }
 
 
