@@ -51,18 +51,27 @@ class IngestionView(APIView):
         file = serializer.validated_data.get('file')
         async_mode = serializer.validated_data.get('async_mode', True)
         
-        # 파일 처리
+        # 파일 처리 - 영구 저장
         file_path = None
         if file:
             ext = os.path.splitext(file.name)[1]
-            with tempfile.NamedTemporaryFile(
-                delete=False, 
-                suffix=ext,
-                dir='/tmp'
-            ) as tmp:
+            # 영구 저장 경로 설정
+            upload_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'media', 'uploads'
+            )
+            os.makedirs(upload_dir, exist_ok=True)
+            
+            # UUID 기반 고유 파일명 생성
+            unique_filename = f"{uuid.uuid4()}{ext}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            
+            # 파일 저장
+            with open(file_path, 'wb') as f:
                 for chunk in file.chunks():
-                    tmp.write(chunk)
-                file_path = tmp.name
+                    f.write(chunk)
+            
+            logger.info(f"[PDF_SAVE] 파일 저장 완료: {file_path} ({os.path.getsize(file_path)} bytes)")
         
         if async_mode:
             try:
