@@ -1,0 +1,129 @@
+{
+  "summary": {
+    "user_id": "f46168b8-b4a0-4f46-9df9-9ce4ceb126cc",
+    "base_forgetting_k": 0.0225,
+    "k_cs": 0.01,
+    "k_dialect": 0.0413,
+    "domain_ratio": 4.13,
+    "overall_illusion": 0.021,
+    "recommendation": "🧠 느린 망각 패턴: 넉넉한 간격 복습 가능 (1일, 1주, 1개월) | 📚 신규 도메인 학습 시 더 집중적인 복습 필요"
+  },
+  "cs_domain": {
+    "domain": "Computer Science",
+    "forgetting_k": 0.01,
+    "encoding_strength": 0.821,
+    "retention_rate_24h": 0.9,
+    "illusion_tendency": "균형 (Calibrated)",
+    "time_series": [
+      {
+        "time_point": "T0",
+        "accuracy": 1.0,
+        "avg_rt_ms": 2176.1,
+        "avg_confidence": 0.758,
+        "illusion_score": -0.242,
+        "sample_count": 10
+      },
+      {
+        "time_point": "T1",
+        "accuracy": 0.6,
+        "avg_rt_ms": 2756.7,
+        "avg_confidence": 0.686,
+        "illusion_score": 0.086,
+        "sample_count": 10
+      },
+      {
+        "time_point": "T2",
+        "accuracy": 0.7,
+        "avg_rt_ms": 3069.3,
+        "avg_confidence": 0.762,
+        "illusion_score": 0.062,
+        "sample_count": 10
+      },
+      {
+        "time_point": "T3",
+        "accuracy": 0.9,
+        "avg_rt_ms": 3307.6,
+        "avg_confidence": 0.772,
+        "illusion_score": -0.128,
+        "sample_count": 10
+      }
+    ]
+  },
+  "dialect_domain": {
+    "domain": "경상도 사투리",
+    "forgetting_k": 0.0413,
+    "encoding_strength": 0.522,
+    "retention_rate_24h": 0.2,
+    "illusion_tendency": "균형 (Calibrated)",
+    "time_series": [
+      {
+        "time_point": "T0",
+        "accuracy": 0.6,
+        "avg_rt_ms": 3180.2,
+        "avg_confidence": 0.564,
+        "illusion_score": -0.036,
+        "sample_count": 10
+      },
+      {
+        "time_point": "T1",
+        "accuracy": 0.6,
+        "avg_rt_ms": 3919.0,
+        "avg_confidence": 0.546,
+        "illusion_score": -0.054,
+        "sample_count": 10
+      },
+      {
+        "time_point": "T2",
+        "accuracy": 0.4,
+        "avg_rt_ms": 4381.1,
+        "avg_confidence": 0.591,
+        "illusion_score": 0.191,
+        "sample_count": 10
+      },
+      {
+        "time_point": "T3",
+        "accuracy": 0.2,
+        "avg_rt_ms": 4900.4,
+        "avg_confidence": 0.485,
+        "illusion_score": 0.285,
+        "sample_count": 10
+      }
+    ]
+  },
+  "temporal_comparison": {
+    "T0": {
+      "cs_accuracy": 1.0,
+      "dialect_accuracy": 0.6,
+      "accuracy_difference": 0.4,
+      "cs_rt_ms": 2176.1,
+      "dialect_rt_ms": 3180.2
+    },
+    "T1": {
+      "cs_accuracy": 0.6,
+      "dialect_accuracy": 0.6,
+      "accuracy_difference": 0.0,
+      "cs_rt_ms": 2756.7,
+      "dialect_rt_ms": 3919.0
+    },
+    "T2": {
+      "cs_accuracy": 0.7,
+      "dialect_accuracy": 0.4,
+      "accuracy_difference": 0.3,
+      "cs_rt_ms": 3069.3,
+      "dialect_rt_ms": 4381.1
+    },
+    "T3": {
+      "cs_accuracy": 0.9,
+      "dialect_accuracy": 0.2,
+      "accuracy_difference": 0.7,
+      "cs_rt_ms": 3307.6,
+      "dialect_rt_ms": 4900.4
+    }
+  },
+  "cognitive_interpretation": {
+    "forgetting_pattern": "두 도메인의 망각 기울기가 유사함 (CS: 0.010, 사투리: 0.041). 도메인 친숙도와 무관하게 일정한 기억 패턴을 보임.",
+    "encoding_pattern": "CS 도메인의 초기 인코딩 강도(0.821)가 사투리 도메인(0.522)보다 높음. 기존 스키마와의 연결이 초기 기억 형성을 강화함.",
+    "metacognition_pattern": "두 도메인 모두에서 균형 잡힌 메타인지를 보임. 확신도와 실제 정답률이 잘 일치함.",
+    "domain_transfer": "도메인 망각 비율이 4.13로, 신규 도메인 학습 시 기존 도메인보다 약 4.1배 빠르게 망각됨. 새로운 도메인 학습 시 강화된 복습 스케줄 적용 권장."
+  }
+}
