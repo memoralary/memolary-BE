@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - back/build/16
-  workflow_dispatch:  # 수동 실행 허용
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: '3.12'
@@ -25,8 +25,8 @@ jobs:
       
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip --quiet
+          pip install -r requirements.txt --quiet
       
       - name: Run tests
         run: |
@@ -38,7 +38,7 @@ jobs:
   deploy:
     name: Deploy to EC2
     runs-on: ubuntu-latest
-    needs: test  # 테스트 통과 후 배포
+    needs: test
     if: github.ref == 'refs/heads/back/build/16'
     
     steps:
@@ -53,113 +53,127 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
           command_timeout: 30m
-          request_pty: false      # PTY 비활성화 → SIGTERM 방지
-          script_stop: false      # 스크립트 에러 시에도 계속 진행
+          request_pty: false
+          script_stop: false
           script: |
-            set -e
+            #!/bin/bash
+            # ============================================
+            # Memolary Backend 배포 스크립트
+            # ============================================
             
             PROJECT_DIR=~/memolary-backend
+            BRANCH="back/build/16"
+            
+            echo "🚀 Starting deployment..."
             
             # ============================================
-            # 디스크 정리 (안전하게)
-            # ============================================
-            echo "🧹 Cleaning up disk space..."
-            sudo apt clean || true
-            pip cache purge || true
-            
-            # ============================================
-            # 초기 설정 (프로젝트가 없으면 실행)
+            # 1. 초기 설정 (프로젝트가 없을 때만)
             # ============================================
             if [ ! -d "$PROJECT_DIR" ]; then
-              echo "🔧 Initial setup - installing dependencies..."
+              echo "📦 First-time setup..."
               
-              # Python 3.12 설치
-              sudo apt update
-              sudo apt install -y software-properties-common
+              # 시스템 패키지 (로그 최소화)
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq software-properties-common
               sudo add-apt-repository -y ppa:deadsnakes/ppa
-              sudo apt update
-              sudo apt install -y python3.12 python3.12-venv python3.12-dev git redis-server
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq python3.12 python3.12-venv python3.12-dev git redis-server curl
               
               # Redis 시작
-              sudo systemctl enable redis-server
+              sudo systemctl enable redis-server --quiet
               sudo systemctl start redis-server
               
               # 프로젝트 클론
-              cd ~
-              git clone https://github.com/memoralary/memolary-BE.git memolary-backend
-              cd $PROJECT_DIR
+              git clone --quiet https://github.com/memoralary/memolary-BE.git "$PROJECT_DIR"
+              cd "$PROJECT_DIR"
               
               # 가상환경 생성
               python3.12 -m venv venv
               source venv/bin/activate
-              pip install --upgrade pip
               
-              # ⚠️ CPU PyTorch 먼저 설치 (CUDA 방지)
-              echo "📦 Installing CPU-only PyTorch..."
-              pip install torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
-              
-              # 나머지 의존성 설치
-              pip install -r requirements.txt --no-deps || pip install -r requirements.txt
+              # pip 업그레이드 + CPU PyTorch (조용히)
+              pip install --upgrade pip --quiet
+              pip install torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu --quiet --progress-bar off
+              pip install -r requirements.txt --quiet --progress-bar off
               
               echo "✅ Initial setup completed!"
             fi
             
             # ============================================
-            # 배포
+            # 2. 배포 (항상 실행)
             # ============================================
-            cd $PROJECT_DIR
+            cd "$PROJECT_DIR"
             
-            # 최신 코드 가져오기
-            git fetch origin back/build/16
-            git reset --hard origin/back/build/16
+            echo "📥 Fetching latest code..."
+            git fetch origin "$BRANCH" --quiet
+            git reset --hard "origin/$BRANCH" --quiet
             
-            # 가상환경 활성화
+            # 가상환경 활성화 (이후 모든 pip/python 명령에 적용)
             source venv/bin/activate
             
-            # pip 캐시 정리 후 설치
-            pip cache purge || true
+            echo "📦 Installing dependencies..."
+            # pip 캐시 정리 (venv 활성화 후에만!)
+            pip cache purge 2>/dev/null || true
             
-            # CPU PyTorch 먼저 확인/설치
-            pip show torch | grep -q "cpu" || pip install torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+            # 의존성 설치 (조용히 + 프로그레스바 끔)
+            pip install -r requirements.txt --quiet --progress-bar off 2>/dev/null
             
-            # 의존성 설치
-            pip install -r requirements.txt
-            
-            # 데이터베이스 마이그레이션
+            echo "🗃️ Running migrations..."
             python manage.py migrate --noinput
             
-            # 기존 프로세스 종료
-            pkill -f "gunicorn" || true
-            pkill -f "celery" || true
+            # ============================================
+            # 3. 서비스 재시작
+            # ============================================
+            echo "🔄 Restarting services..."
+            
+            # 기존 프로세스 종료 (에러 무시)
+            pkill -f "gunicorn.*backend.wsgi" 2>/dev/null || true
+            pkill -f "celery.*backend" 2>/dev/null || true
             sleep 2
             
-            # ============================================
-            # 백그라운드 프로세스 실행 (SSH 세션과 완전 분리)
-            # ============================================
-            # 핵심: stdin 닫기 (</dev/null) + stdout/stderr 리다이렉트 + disown
-            
-            # Gunicorn 실행
+            # Gunicorn 실행 (SSH 세션과 완전 분리)
             nohup venv/bin/gunicorn backend.wsgi:application \
               --bind 0.0.0.0:8000 \
               --workers 3 \
               --timeout 120 \
               </dev/null >gunicorn.log 2>&1 &
-            GUNICORN_PID=$!
-            disown $GUNICORN_PID
-            echo "Gunicorn started with PID: $GUNICORN_PID"
+            disown $!
             
-            # Celery 워커 실행
+            # Celery 실행 (SSH 세션과 완전 분리)
             nohup venv/bin/celery -A backend worker -l info --concurrency=2 \
               </dev/null >celery.log 2>&1 &
-            CELERY_PID=$!
-            disown $CELERY_PID
-            echo "Celery started with PID: $CELERY_PID"
+            disown $!
+            
+            sleep 3
+            
+            # ============================================
+            # 4. 헬스체크
+            # ============================================
+            echo "🔍 Health check..."
             
             # 프로세스 확인
+            GUNICORN_COUNT=$(pgrep -c -f "gunicorn.*backend.wsgi" || echo "0")
+            CELERY_COUNT=$(pgrep -c -f "celery.*backend" || echo "0")
+            
+            if [ "$GUNICORN_COUNT" -gt 0 ] && [ "$CELERY_COUNT" -gt 0 ]; then
+              echo "✅ Services running: Gunicorn($GUNICORN_COUNT) Celery($CELERY_COUNT)"
+            else
+              echo "⚠️ Warning: Some services may not be running"
+              echo "   Gunicorn: $GUNICORN_COUNT, Celery: $CELERY_COUNT"
+            fi
+            
+            # API 헬스체크 (선택적)
             sleep 2
-            ps aux | grep -E "(gunicorn|celery)" | grep -v grep || true
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/ 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "404" ]; then
+              echo "✅ API responding (HTTP $HTTP_CODE)"
+            else
+              echo "⚠️ API health check: HTTP $HTTP_CODE (may still be starting)"
+            fi
             
-            echo "✅ Deployment completed! Server running on port 8000"
+            echo ""
+            echo "🎉 Deployment completed successfully!"
+            echo "   Server: http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):8000"
             
-            # 명시적 정상 종료
             exit 0
+
