@@ -131,49 +131,39 @@ jobs:
             pkill -f "celery.*backend" 2>/dev/null || true
             sleep 2
             
-            # Gunicorn 실행 (SSH 세션과 완전 분리)
-            nohup venv/bin/gunicorn backend.wsgi:application \
+            # Gunicorn 실행 (setsid로 완전히 새로운 세션에서 시작)
+            setsid venv/bin/gunicorn backend.wsgi:application \
               --bind 0.0.0.0:8000 \
               --workers 3 \
               --timeout 120 \
-              </dev/null >gunicorn.log 2>&1 &
-            disown $!
+              --daemon \
+              --pid gunicorn.pid \
+              --access-logfile gunicorn_access.log \
+              --error-logfile gunicorn_error.log
             
-            # Celery 실행 (SSH 세션과 완전 분리)
-            nohup venv/bin/celery -A backend worker -l info --concurrency=2 \
-              </dev/null >celery.log 2>&1 &
-            disown $!
+            # Celery 실행 (setsid로 완전히 새로운 세션에서 시작)
+            setsid venv/bin/celery -A backend worker -l info --concurrency=2 \
+              --detach \
+              --pidfile celery.pid \
+              --logfile celery.log
             
-            sleep 3
+            sleep 2
             
-            # ============================================
-            # 4. 헬스체크
-            # ============================================
+            # 헬스체크
             echo "🔍 Health check..."
             
-            # 프로세스 확인
-            GUNICORN_COUNT=$(pgrep -c -f "gunicorn.*backend.wsgi" || echo "0")
-            CELERY_COUNT=$(pgrep -c -f "celery.*backend" || echo "0")
-            
-            if [ "$GUNICORN_COUNT" -gt 0 ] && [ "$CELERY_COUNT" -gt 0 ]; then
-              echo "✅ Services running: Gunicorn($GUNICORN_COUNT) Celery($CELERY_COUNT)"
+            if [ -f gunicorn.pid ] && kill -0 $(cat gunicorn.pid) 2>/dev/null; then
+              echo "✅ Gunicorn running (PID: $(cat gunicorn.pid))"
             else
-              echo "⚠️ Warning: Some services may not be running"
-              echo "   Gunicorn: $GUNICORN_COUNT, Celery: $CELERY_COUNT"
+              echo "⚠️ Gunicorn may not be running"
             fi
             
-            # API 헬스체크 (선택적)
-            sleep 2
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/ 2>/dev/null || echo "000")
-            if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "404" ]; then
-              echo "✅ API responding (HTTP $HTTP_CODE)"
+            if [ -f celery.pid ] && kill -0 $(cat celery.pid) 2>/dev/null; then
+              echo "✅ Celery running (PID: $(cat celery.pid))"
             else
-              echo "⚠️ API health check: HTTP $HTTP_CODE (may still be starting)"
+              echo "⚠️ Celery may not be running"
             fi
             
             echo ""
-            echo "🎉 Deployment completed successfully!"
-            echo "   Server: http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):8000"
-            
+            echo "🎉 Deployment completed!"
             exit 0
-
