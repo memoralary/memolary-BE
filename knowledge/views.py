@@ -247,8 +247,20 @@ class IngestionView(APIView):
                 if created:
                     result["edges_created"] += 1
         
+        # 3D 좌표 생성을 위해 데이터 준비 (DB 재조회 방지)
+        vis_nodes = []
+        for n in saved_nodes:
+            emb = n.get_embedding()
+            if emb is not None:
+                vis_nodes.append({
+                    'id': str(n.id),
+                    'title': n.title,
+                    'embedding': emb,
+                    'cluster_id': n.cluster_id
+                })
+
         visualizer = GalaxyVisualizer(scale=100.0)
-        visualizer.generate_coordinates()
+        visualizer.generate_coordinates(nodes=vis_nodes)
         visualizer.save_to_db()
         
         result["status"] = "completed"

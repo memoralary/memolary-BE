@@ -204,8 +204,19 @@ def process_ingestion(
         
         from services.knowledge.visualization import GalaxyVisualizer
         
+        vis_nodes = []
+        for n in saved_nodes:
+            emb = n.get_embedding()
+            if emb is not None:
+                vis_nodes.append({
+                    'id': str(n.id),
+                    'title': n.title,
+                    'embedding': emb,
+                    'cluster_id': n.cluster_id
+                })
+        
         visualizer = GalaxyVisualizer(scale=100.0)
-        viz_result = visualizer.generate_coordinates()
+        viz_result = visualizer.generate_coordinates(nodes=vis_nodes)
         visualizer.save_to_db()
         
         result["steps"].append({
