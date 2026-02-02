@@ -32,7 +32,8 @@ DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
 # ALLOWED_HOSTS 설정
 ALLOWED_HOSTS = [
-    "3.37.88.166",
+    "15.164.92.26",
+    "3.37.88.166",  # 이전 IP (혹시 모르니 유지)
     "localhost",
     "127.0.0.1",
 ]
