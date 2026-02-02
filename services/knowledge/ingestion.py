@@ -258,7 +258,7 @@ class IngestionService:
     
     def __init__(
         self,
-        chunk_size: int = 2000,
+        chunk_size: int = 4000,  # 속도 최적화: 2000 → 4000 (API 호출 절반)
         chunk_overlap: int = 200,
         min_chunk_size: int = 100
     ):
