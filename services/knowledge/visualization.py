@@ -200,11 +200,12 @@ class GalaxyVisualizer:
         
         if len(nodes) < 2:
             logger.warning("노드가 2개 미만이어서 3D 좌표를 생성할 수 없습니다.")
-            return VisualizationResult(
+            self._result = VisualizationResult(
                 coordinates=[],
                 cluster_centers={},
                 dimensions=(0, 0, 0)
             )
+            return self._result
         
         self._node_data = nodes
         
