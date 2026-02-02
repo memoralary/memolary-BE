@@ -69,13 +69,22 @@ jobs:
             # 데이터베이스 마이그레이션
             python manage.py migrate --noinput
             
-            # 정적 파일 수집 (필요한 경우)
-            python manage.py collectstatic --noinput
+            # 기존 프로세스 종료
+            pkill -f "gunicorn" || true
+            pkill -f "celery" || true
             
-            # Gunicorn 서비스 재시작
-            sudo systemctl restart gunicorn
+            # .env 파일 로드하고 Gunicorn 실행 (8000 포트, 백그라운드)
+            nohup venv/bin/gunicorn backend.wsgi:application \
+              --bind 0.0.0.0:8000 \
+              --workers 3 \
+              --timeout 120 \
+              --access-logfile - \
+              --error-logfile - \
+              > gunicorn.log 2>&1 &
             
-            # Celery 워커 재시작
-            sudo systemctl restart celery
+            # Celery 워커 실행 (백그라운드)
+            nohup venv/bin/celery -A backend worker -l info --concurrency=2 \
+              > celery.log 2>&1 &
             
-            echo "✅ Deployment completed successfully!"
+            sleep 3
+            echo "✅ Deployment completed! Server running on port 8000"
