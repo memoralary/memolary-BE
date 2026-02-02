@@ -53,8 +53,45 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
           script: |
-            # 프로젝트 디렉토리로 이동
-            cd ~/memolary-backend
+            set -e
+            
+            PROJECT_DIR=~/memolary-backend
+            
+            # ============================================
+            # 초기 설정 (프로젝트가 없으면 실행)
+            # ============================================
+            if [ ! -d "$PROJECT_DIR" ]; then
+              echo "🔧 Initial setup - installing dependencies..."
+              
+              # Python 3.12 설치
+              sudo apt update
+              sudo apt install -y software-properties-common
+              sudo add-apt-repository -y ppa:deadsnakes/ppa
+              sudo apt update
+              sudo apt install -y python3.12 python3.12-venv python3.12-dev git redis-server
+              
+              # Redis 시작
+              sudo systemctl enable redis-server
+              sudo systemctl start redis-server
+              
+              # 프로젝트 클론
+              cd ~
+              git clone https://github.com/memoralary/memolary-BE.git memolary-backend
+              cd $PROJECT_DIR
+              
+              # 가상환경 생성
+              python3.12 -m venv venv
+              source venv/bin/activate
+              pip install --upgrade pip
+              pip install -r requirements.txt
+              
+              echo "✅ Initial setup completed!"
+            fi
+            
+            # ============================================
+            # 배포
+            # ============================================
+            cd $PROJECT_DIR
             
             # 최신 코드 가져오기
             git fetch origin back/build/16
@@ -72,8 +109,9 @@ jobs:
             # 기존 프로세스 종료
             pkill -f "gunicorn" || true
             pkill -f "celery" || true
+            sleep 2
             
-            # .env 파일 로드하고 Gunicorn 실행 (8000 포트, 백그라운드)
+            # Gunicorn 실행 (8000 포트, 백그라운드)
             nohup venv/bin/gunicorn backend.wsgi:application \
               --bind 0.0.0.0:8000 \
               --workers 3 \
