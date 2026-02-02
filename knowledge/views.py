@@ -212,6 +212,9 @@ class IngestionView(APIView):
             existing = KnowledgeNode.objects.filter(title=node.title).first()
             
             if existing:
+                if not existing.embedding:
+                    existing.set_embedding(cluster.embedding)
+                    existing.save(update_fields=['embedding'])
                 saved_nodes.append(existing)
             else:
                 new_node = KnowledgeNode.objects.create(
