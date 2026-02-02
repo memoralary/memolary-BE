@@ -212,24 +212,31 @@ class GalaxyVisualizer:
         # 임베딩 매트릭스 생성
         embeddings = np.array([n['embedding'] for n in nodes])
         
-        # 노드가 적으면 n_neighbors 조정
-        actual_n_neighbors = min(self.n_neighbors, len(nodes) - 1)
-        if actual_n_neighbors < self.n_neighbors:
-            logger.info(f"노드 수가 적어 n_neighbors를 {actual_n_neighbors}로 조정")
-            self._umap = None  # 재생성
-            import umap
-            self._umap = umap.UMAP(
-                n_components=3,
-                n_neighbors=actual_n_neighbors,
-                min_dist=self.min_dist,
-                spread=self.spread,
-                random_state=self.random_state,
-                metric='cosine'
-            )
-        
-        # UMAP 차원 축소
-        logger.info("UMAP 3D 변환 중...")
-        coords_3d = self.umap.fit_transform(embeddings)
+        # [Fix] 데이터가 너무 적으면 UMAP 수행 불가 (k >= N 에러 방지)
+        # N=3, k=3 이면 에러 발생. 최소 4개 이상이어야 3D UMAP 안전.
+        if len(nodes) <= 3:
+            logger.info(f"노드 수({len(nodes)})가 적어 UMAP 대신 랜덤 배치 사용")
+            # -1.0 ~ 1.0 범위 랜덤 생성 후 스케일링
+            coords_3d = (np.random.rand(len(nodes), 3) - 0.5) * 2 * self.scale
+        else:
+            # 노드가 적으면 n_neighbors 조정
+            actual_n_neighbors = min(self.n_neighbors, len(nodes) - 1)
+            if actual_n_neighbors < self.n_neighbors:
+                logger.info(f"노드 수가 적어 n_neighbors를 {actual_n_neighbors}로 조정")
+                self._umap = None  # 재생성
+                import umap
+                self._umap = umap.UMAP(
+                    n_components=3,
+                    n_neighbors=actual_n_neighbors,
+                    min_dist=self.min_dist,
+                    spread=self.spread,
+                    random_state=self.random_state,
+                    metric='cosine'
+                )
+            
+            # UMAP 차원 축소
+            logger.info("UMAP 3D 변환 중...")
+            coords_3d = self.umap.fit_transform(embeddings)
         
         # 스케일 조정 및 정규화
         coords_3d = self._normalize_and_scale(coords_3d)
