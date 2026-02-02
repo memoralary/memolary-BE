@@ -223,12 +223,21 @@ class GalaxyVisualizer:
                 min_dist=self.min_dist,
                 spread=self.spread,
                 random_state=self.random_state,
-                metric='cosine'
+                metric='cosine',
+                init='random' if len(nodes) < 15 else 'spectral'
             )
         
         # UMAP 차원 축소
-        logger.info("UMAP 3D 변환 중...")
-        coords_3d = self.umap.fit_transform(embeddings)
+        if len(nodes) < 5:
+            logger.info(f"노드 수가 너무 적어 ({len(nodes)}개) 랜덤 좌표를 생성합니다.")
+            coords_3d = np.random.uniform(-1, 1, size=(len(nodes), 3))
+        else:
+            logger.info("UMAP 3D 변환 중...")
+            try:
+                coords_3d = self.umap.fit_transform(embeddings)
+            except Exception as e:
+                logger.warning(f"UMAP 변환 실패, 랜덤 좌표 사용: {e}")
+                coords_3d = np.random.uniform(-1, 1, size=(len(nodes), 3))
         
         # 스케일 조정 및 정규화
         coords_3d = self._normalize_and_scale(coords_3d)
