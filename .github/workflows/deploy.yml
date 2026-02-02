@@ -58,6 +58,13 @@ jobs:
             PROJECT_DIR=~/memolary-backend
             
             # ============================================
+            # 디스크 정리 (안전하게)
+            # ============================================
+            echo "🧹 Cleaning up disk space..."
+            sudo apt clean || true
+            pip cache purge || true
+            
+            # ============================================
             # 초기 설정 (프로젝트가 없으면 실행)
             # ============================================
             if [ ! -d "$PROJECT_DIR" ]; then
@@ -83,7 +90,13 @@ jobs:
               python3.12 -m venv venv
               source venv/bin/activate
               pip install --upgrade pip
-              pip install -r requirements.txt
+              
+              # ⚠️ CPU PyTorch 먼저 설치 (CUDA 방지)
+              echo "📦 Installing CPU-only PyTorch..."
+              pip install torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+              
+              # 나머지 의존성 설치
+              pip install -r requirements.txt --no-deps || pip install -r requirements.txt
               
               echo "✅ Initial setup completed!"
             fi
@@ -99,6 +112,12 @@ jobs:
             
             # 가상환경 활성화
             source venv/bin/activate
+            
+            # pip 캐시 정리 후 설치
+            pip cache purge || true
+            
+            # CPU PyTorch 먼저 확인/설치
+            pip show torch | grep -q "cpu" || pip install torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu
             
             # 의존성 설치
             pip install -r requirements.txt
@@ -126,3 +145,4 @@ jobs:
             
             sleep 3
             echo "✅ Deployment completed! Server running on port 8000"
+
