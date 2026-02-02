@@ -122,48 +122,19 @@ jobs:
             python manage.py migrate --noinput
             
             # ============================================
-            # 3. 서비스 재시작
+            # 3. 서비스 재시작 (systemd)
             # ============================================
             echo "🔄 Restarting services..."
-            
-            # 기존 프로세스 종료 (에러 무시)
-            pkill -f "gunicorn.*backend.wsgi" 2>/dev/null || true
-            pkill -f "celery.*backend" 2>/dev/null || true
-            sleep 2
-            
-            # Gunicorn 실행 (setsid로 완전히 새로운 세션에서 시작)
-            setsid venv/bin/gunicorn backend.wsgi:application \
-              --bind 0.0.0.0:8000 \
-              --workers 3 \
-              --timeout 120 \
-              --daemon \
-              --pid gunicorn.pid \
-              --access-logfile gunicorn_access.log \
-              --error-logfile gunicorn_error.log
-            
-            # Celery 실행 (setsid로 완전히 새로운 세션에서 시작)
-            setsid venv/bin/celery -A backend worker -l info --concurrency=2 \
-              --detach \
-              --pidfile celery.pid \
-              --logfile celery.log
+            sudo systemctl restart gunicorn celery
             
             sleep 2
             
             # 헬스체크
             echo "🔍 Health check..."
-            
-            if [ -f gunicorn.pid ] && kill -0 $(cat gunicorn.pid) 2>/dev/null; then
-              echo "✅ Gunicorn running (PID: $(cat gunicorn.pid))"
-            else
-              echo "⚠️ Gunicorn may not be running"
-            fi
-            
-            if [ -f celery.pid ] && kill -0 $(cat celery.pid) 2>/dev/null; then
-              echo "✅ Celery running (PID: $(cat celery.pid))"
-            else
-              echo "⚠️ Celery may not be running"
-            fi
+            sudo systemctl is-active --quiet gunicorn && echo "✅ Gunicorn: active" || echo "❌ Gunicorn: inactive"
+            sudo systemctl is-active --quiet celery && echo "✅ Celery: active" || echo "❌ Celery: inactive"
             
             echo ""
             echo "🎉 Deployment completed!"
             exit 0
+
