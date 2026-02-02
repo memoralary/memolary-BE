@@ -52,7 +52,9 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
-          command_timeout: 30m  # 타임아웃 30분으로 설정
+          command_timeout: 30m
+          request_pty: false      # PTY 비활성화 → SIGTERM 방지
+          script_stop: false      # 스크립트 에러 시에도 계속 진행
           script: |
             set -e
             
@@ -131,19 +133,33 @@ jobs:
             pkill -f "celery" || true
             sleep 2
             
-            # Gunicorn 실행 (8000 포트, 백그라운드)
+            # ============================================
+            # 백그라운드 프로세스 실행 (SSH 세션과 완전 분리)
+            # ============================================
+            # 핵심: stdin 닫기 (</dev/null) + stdout/stderr 리다이렉트 + disown
+            
+            # Gunicorn 실행
             nohup venv/bin/gunicorn backend.wsgi:application \
               --bind 0.0.0.0:8000 \
               --workers 3 \
               --timeout 120 \
-              --access-logfile - \
-              --error-logfile - \
-              > gunicorn.log 2>&1 &
+              </dev/null >gunicorn.log 2>&1 &
+            GUNICORN_PID=$!
+            disown $GUNICORN_PID
+            echo "Gunicorn started with PID: $GUNICORN_PID"
             
-            # Celery 워커 실행 (백그라운드)
+            # Celery 워커 실행
             nohup venv/bin/celery -A backend worker -l info --concurrency=2 \
-              > celery.log 2>&1 &
+              </dev/null >celery.log 2>&1 &
+            CELERY_PID=$!
+            disown $CELERY_PID
+            echo "Celery started with PID: $CELERY_PID"
             
-            sleep 3
+            # 프로세스 확인
+            sleep 2
+            ps aux | grep -E "(gunicorn|celery)" | grep -v grep || true
+            
             echo "✅ Deployment completed! Server running on port 8000"
-
+            
+            # 명시적 정상 종료
+            exit 0
