@@ -377,7 +377,27 @@ class NodeSelector:
     테스트 대상 노드 선정
     
     각 도메인에서 적절한 노드를 선택하여 테스트 세트 구성
+    
+    분류 기준:
+    - CS (TRACK_A): Computer Science 관련 노드, 방언/사투리 태그 제외
+    - Dialect (TRACK_B): 경상도/전라도 사투리, 방언 관련 노드
     """
+    
+    # 방언/사투리 관련 태그 (CS에서 제외해야 할 태그)
+    DIALECT_EXCLUDE_TAGS = [
+        '경상도', '전라도', '사투리', '방언', '지역표현', '구어체',
+        '경상도_사투리', '경상도_방언', '전라도_사투리', '전라도_방언',
+        'dialect', '향토문화', '지역문화', '민속',
+    ]
+    
+    # CS 관련 태그 (순수 CS 노드 식별용)
+    CS_INCLUDE_TAGS = [
+        '데이터베이스', '운영체제', '자료구조', '네트워크', '알고리즘',
+        '컴퓨터과학', '프로그래밍', '소프트웨어', '시스템',
+        'database', 'os', 'data_structure', 'network', 'algorithm',
+        'computer_science', 'programming', 'software', 'machine_learning',
+        '머신러닝', '딥러닝', 'deep_learning', 'api', 'backend', 'frontend',
+    ]
     
     def __init__(self, nodes_per_domain: int = 10):
         """
@@ -386,46 +406,149 @@ class NodeSelector:
         """
         self.nodes_per_domain = nodes_per_domain
     
+    def _has_dialect_tags(self, node) -> bool:
+        """노드가 방언/사투리 관련 태그를 가지고 있는지 확인"""
+        if not node.tags:
+            return False
+        
+        node_tags_lower = [str(tag).lower() for tag in node.tags]
+        for exclude_tag in self.DIALECT_EXCLUDE_TAGS:
+            for node_tag in node_tags_lower:
+                if exclude_tag.lower() in node_tag:
+                    return True
+        return False
+    
+    def _has_cs_tags(self, node) -> bool:
+        """노드가 CS 관련 태그를 가지고 있는지 확인"""
+        if not node.tags:
+            return False
+        
+        node_tags_lower = [str(tag).lower() for tag in node.tags]
+        for cs_tag in self.CS_INCLUDE_TAGS:
+            for node_tag in node_tags_lower:
+                if cs_tag.lower() in node_tag:
+                    return True
+        return False
+    
     def select_cs_nodes(self) -> List:
-        """CS 도메인 노드 선정"""
+        """
+        CS 도메인 노드 선정
+        
+        선정 기준 (우선순위):
+        1. TrackType.TRACK_A + CS 관련 태그 노드 (최우선)
+        2. TrackType.TRACK_A + 방언 태그 없는 노드 (보조)
+        3. 중립 노드 (TRACK_B 및 방언 태그 제외)
+        """
         from knowledge.models import KnowledgeNode, TrackType
+        import random
         
-        # TrackType.TRACK_A (익숙한 도메인) 기준 선정
-        # SQLite 호환: JSON 필드 lookup 대신 track_type 사용
-        nodes = KnowledgeNode.objects.filter(
+        # 1단계: TRACK_A 노드 중 CS 태그가 있고 방언 태그가 없는 노드 (최우선)
+        all_track_a = list(KnowledgeNode.objects.filter(
             track_type=TrackType.TRACK_A
-        ).order_by('?')[:self.nodes_per_domain]
+        ))
         
-        # 부족하면 일반 노드에서 추가
-        if nodes.count() < self.nodes_per_domain:
-            existing_ids = list(nodes.values_list('id', flat=True))
-            additional = KnowledgeNode.objects.exclude(
-                id__in=existing_ids
-            ).exclude(
-                track_type=TrackType.TRACK_B
-            ).order_by('?')[:self.nodes_per_domain - nodes.count()]
-            nodes = list(nodes) + list(additional)
+        # Tier 1: CS 태그 있음 + 방언 태그 없음
+        tier1_candidates = [
+            node for node in all_track_a 
+            if self._has_cs_tags(node) and not self._has_dialect_tags(node)
+        ]
         
-        logger.info(f"[NodeSelector] CS 도메인 노드 {len(list(nodes))}개 선정")
-        return list(nodes)
+        # Tier 2: CS 태그 없지만 방언 태그도 없음 (중립 노드)
+        tier2_candidates = [
+            node for node in all_track_a 
+            if not self._has_cs_tags(node) and not self._has_dialect_tags(node)
+        ]
+        
+        # 로깅
+        logger.info(f"[NodeSelector] TRACK_A 분석: 총 {len(all_track_a)}개, "
+                   f"CS태그 {len(tier1_candidates)}개, 중립 {len(tier2_candidates)}개")
+        
+        # Tier 1에서 우선 선정
+        random.shuffle(tier1_candidates)
+        selected = tier1_candidates[:self.nodes_per_domain]
+        
+        # Tier 1이 부족하면 Tier 2에서 추가
+        if len(selected) < self.nodes_per_domain:
+            needed = self.nodes_per_domain - len(selected)
+            random.shuffle(tier2_candidates)
+            selected.extend(tier2_candidates[:needed])
+        
+        # 2단계: 여전히 부족하면 다른 노드에서 추가 (TRACK_B 및 방언 태그 제외)
+        if len(selected) < self.nodes_per_domain:
+            existing_ids = {node.id for node in selected}
+            
+            additional_candidates = [
+                node for node in KnowledgeNode.objects.exclude(
+                    id__in=existing_ids
+                ).exclude(
+                    track_type=TrackType.TRACK_B
+                )
+                if not self._has_dialect_tags(node)
+            ]
+            
+            random.shuffle(additional_candidates)
+            needed = self.nodes_per_domain - len(selected)
+            selected.extend(additional_candidates[:needed])
+        
+        logger.info(f"[NodeSelector] CS 도메인 노드 {len(selected)}개 선정 (TRACK_A 기반, 방언 태그 제외)")
+        return selected
     
     def select_dialect_nodes(self) -> List:
-        """경상도 사투리 도메인 노드 선정"""
+        """
+        경상도/전라도 사투리 도메인 노드 선정
+        
+        선정 기준:
+        1. TrackType.TRACK_B인 노드 우선
+        2. 부족하면 방언/사투리 관련 태그가 있는 TRACK_A 노드도 포함
+        """
         from knowledge.models import KnowledgeNode, TrackType
+        import random
         
-        # TrackType.TRACK_B (신규 도메인) 기준 선정
-        nodes = KnowledgeNode.objects.filter(
+        # 1단계: TRACK_B 노드 선정
+        track_b_nodes = list(KnowledgeNode.objects.filter(
             track_type=TrackType.TRACK_B
-        ).order_by('?')[:self.nodes_per_domain]
+        ))
+        random.shuffle(track_b_nodes)
+        selected = track_b_nodes[:self.nodes_per_domain]
         
-        logger.info(f"[NodeSelector] 경상도 사투리 도메인 노드 {len(list(nodes))}개 선정")
-        return list(nodes)
+        # 2단계: 부족하면 TRACK_A 중 방언 태그가 있는 노드 추가
+        if len(selected) < self.nodes_per_domain:
+            existing_ids = {node.id for node in selected}
+            
+            dialect_tagged_nodes = [
+                node for node in KnowledgeNode.objects.filter(
+                    track_type=TrackType.TRACK_A
+                ).exclude(id__in=existing_ids)
+                if self._has_dialect_tags(node)
+            ]
+            
+            random.shuffle(dialect_tagged_nodes)
+            needed = self.nodes_per_domain - len(selected)
+            selected.extend(dialect_tagged_nodes[:needed])
+            
+            if dialect_tagged_nodes:
+                logger.info(f"[NodeSelector] TRACK_A에서 방언 태그 노드 {min(needed, len(dialect_tagged_nodes))}개 추가 선정")
+        
+        logger.info(f"[NodeSelector] 사투리 도메인 노드 {len(selected)}개 선정 (TRACK_B + 방언 태그)")
+        return selected
     
     def get_test_nodes(self) -> Dict[str, List]:
         """테스트용 전체 노드 세트 반환"""
+        cs_nodes = self.select_cs_nodes()
+        dialect_nodes = self.select_dialect_nodes()
+        
+        # 중복 검증: 같은 노드가 양쪽에 포함되어 있지 않은지 확인
+        cs_ids = {node.id for node in cs_nodes}
+        dialect_ids = {node.id for node in dialect_nodes}
+        overlap = cs_ids & dialect_ids
+        
+        if overlap:
+            logger.warning(f"[NodeSelector] CS/Dialect 중복 노드 {len(overlap)}개 발견, Dialect에서 제거")
+            dialect_nodes = [node for node in dialect_nodes if node.id not in overlap]
+        
         return {
-            Domain.CS.value: self.select_cs_nodes(),
-            Domain.DIALECT.value: self.select_dialect_nodes()
+            Domain.CS.value: cs_nodes,
+            Domain.DIALECT.value: dialect_nodes
         }
 
 
