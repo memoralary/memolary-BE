@@ -237,6 +237,7 @@ def process_ingestion(
         self.update_state(state='PROGRESS', meta={'step': 4, 'message': 'DB 저장 중...'})
         
         from knowledge.models import TrackType
+        from services.llm.schemas import NodeSchema  # [Refactor] DTO 사용을 위한 import
         
         # 사투리/방언 도메인 키워드 (TRACK_B)
         DIALECT_KEYWORDS = [
@@ -245,17 +246,22 @@ def process_ingestion(
             '충청', '제주', '강원', '지역어', '토속어'
         ]
         
-        def get_track_type(title: str, tags: list) -> str:
-            """제목/태그 기반으로 track_type 결정"""
-            text = (title + ' ' + ' '.join(tags or [])).lower()
-            for keyword in DIALECT_KEYWORDS:
-                if keyword in text:
-                    return TrackType.TRACK_B
-            return TrackType.TRACK_A
-        
         saved_nodes = []
-        for node, cluster in zip(all_nodes, cluster_results):
-            existing = KnowledgeNode.objects.filter(title=node["title"]).first()
+        for node_dict, cluster in zip(all_nodes, cluster_results):
+            # [Fix] dict -> DTO 변환
+            # 원인: node_dict는 {'title': ..., ...} 형태의 딕셔너리인데 객체처럼(.title) 접근하여 AttributeError 발생
+            # 해결: NodeSchema 객체로 변환하여 안전하게 속성 접근 사용
+            try:
+                node_dto = NodeSchema(
+                    title=node_dict.get("title", ""),
+                    description=node_dict.get("description", ""),
+                    tags=node_dict.get("tags", [])
+                )
+            except Exception as e:
+                logger.error(f"Node DTO 변환 실패: {e}")
+                continue
+
+            existing = KnowledgeNode.objects.filter(title=node_dto.title).first()
             
             if existing:
                 if not existing.embedding:
@@ -265,30 +271,28 @@ def process_ingestion(
             else:
                 # track_type 자동 분류
                 from services.knowledge.track_classifier import classify_track_type
+                
                 track_type = classify_track_type(
-                    title=node.title,
-                    tags=node.tags,
-                    description=node.description
+                    title=node_dto.title,
+                    tags=node_dto.tags,
+                    description=node_dto.description
                 )
                 
+                # [Fix] 중복 create 호출 제거 및 통합
+                # 기존 코드에서 두 번의 create 호출과 dict/obj 접근 혼용이 있었음
                 new_node = KnowledgeNode.objects.create(
-                    title=node.title,
-                    tags=node.tags,
-                    description=node.description
-                )
-                
-                new_node = KnowledgeNode.objects.create(
-                    title=node["title"],
-                    description=node["description"],
+                    title=node_dto.title,
+                    description=node_dto.description,
                     cluster_id=cluster.cluster_id,
-                    tags=node.tags,
-                    track_type=track_type,  # 자동 분류된 track_type 사용
+                    tags=node_dto.tags,
+                    track_type=track_type,
                 )
                 new_node.set_embedding(cluster.embedding)
                 new_node.save()
+                
                 saved_nodes.append(new_node)
                 result["nodes_created"] += 1
-                logger.info(f"노드 저장: {node['title']} (track={track_type})")
+                logger.info(f"노드 저장: {node_dto.title} (track={track_type})")
         
         result["steps"].append({
             "step": 4,
