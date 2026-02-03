@@ -2,15 +2,75 @@
 Celery 태스크 - Knowledge Graph Pipeline
 
 백그라운드에서 실행되는 무거운 작업들
+- 병렬 청크 처리로 PDF 분석 속도 개선
 """
 
 import os
 import logging
-from typing import Dict, Any, Optional
-from celery import shared_task
+from typing import Dict, Any, Optional, List
+from celery import shared_task, group, chord
 from celery.exceptions import Ignore
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# 청크별 노드 추출 태스크 (병렬 처리용)
+# =============================================================================
+
+@shared_task(bind=True, name='knowledge.tasks.extract_chunk_nodes')
+def extract_chunk_nodes(
+    self,
+    chunk: str,
+    chunk_index: int,
+    existing_titles: List[str]
+) -> Dict[str, Any]:
+    """
+    단일 청크에서 노드 추출 (병렬 실행용)
+    
+    Args:
+        chunk: 텍스트 청크
+        chunk_index: 청크 인덱스 (순서 보존용)
+        existing_titles: 기존 노드 제목 목록 (중복 방지)
+        
+    Returns:
+        추출된 노드 정보 딕셔너리
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    try:
+        from services.knowledge.extractor import extract_nodes
+        
+        extraction_result = extract_nodes(chunk, existing_titles)
+        
+        # 직렬화 가능한 형태로 변환
+        nodes_data = [
+            {
+                "title": node.title,
+                "description": node.description or "",
+                "tags": node.tags or []
+            }
+            for node in extraction_result.nodes
+        ]
+        
+        logger.info(f"[청크 {chunk_index}] {len(nodes_data)}개 노드 추출 완료")
+        
+        return {
+            "chunk_index": chunk_index,
+            "nodes": nodes_data,
+            "success": True,
+            "error": None
+        }
+        
+    except Exception as e:
+        logger.warning(f"[청크 {chunk_index}] 추출 실패: {e}")
+        return {
+            "chunk_index": chunk_index,
+            "nodes": [],
+            "success": False,
+            "error": str(e)
+        }
 
 
 @shared_task(bind=True, name='knowledge.tasks.process_ingestion')
@@ -52,7 +112,7 @@ def process_ingestion(
         
         from services.knowledge.ingestion import IngestionService
         
-        service = IngestionService(chunk_size=2000)
+        service = IngestionService(chunk_size=4000)
         
         if text:
             ingestion_result = service.process(text)
@@ -69,30 +129,75 @@ def process_ingestion(
         })
         
         # =================================================================
-        # 2단계: 노드 추출
+        # 2단계: 노드 추출 (병렬 처리)
         # =================================================================
-        self.update_state(state='PROGRESS', meta={'step': 2, 'message': '노드 추출 중...'})
+        self.update_state(state='PROGRESS', meta={'step': 2, 'message': f'노드 추출 중... ({ingestion_result.chunk_count}개 청크 병렬 처리)'})
         
-        from services.knowledge.extractor import extract_nodes
         from knowledge.models import KnowledgeNode
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         
         existing_titles = list(KnowledgeNode.objects.values_list('title', flat=True))
         
-        all_nodes = []
-        for chunk in ingestion_result.chunks:
+        # 병렬 처리 함수
+        def process_chunk(args):
+            chunk, chunk_idx = args
+            from services.knowledge.extractor import extract_nodes
             try:
                 extraction_result = extract_nodes(chunk, existing_titles)
-                all_nodes.extend(extraction_result.nodes)
-                existing_titles.extend([n.title for n in extraction_result.nodes])
+                return {
+                    "chunk_index": chunk_idx,
+                    "nodes": [
+                        {
+                            "title": node.title,
+                            "description": node.description or "",
+                            "tags": node.tags or []
+                        }
+                        for node in extraction_result.nodes
+                    ],
+                    "success": True,
+                    "error": None
+                }
             except Exception as e:
-                logger.warning(f"청크 추출 실패: {e}")
-                result["errors"].append(str(e))
+                logger.warning(f"[청크 {chunk_idx}] 추출 실패: {e}")
+                return {
+                    "chunk_index": chunk_idx,
+                    "nodes": [],
+                    "success": False,
+                    "error": str(e)
+                }
+        
+        # ThreadPoolExecutor로 병렬 처리 (I/O 바운드 작업에 적합)
+        max_workers = min(8, len(ingestion_result.chunks))  # 최대 8개 병렬
+        chunk_args = [(chunk, idx) for idx, chunk in enumerate(ingestion_result.chunks)]
+        
+        all_nodes = []
+        seen_titles = set(existing_titles)  # 중복 제거용
+        
+        logger.info(f"병렬 처리 시작: {len(chunk_args)}개 청크, {max_workers}개 워커")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_chunk, args): args[1] for args in chunk_args}
+            
+            for future in as_completed(futures):
+                chunk_result = future.result()
+                
+                if chunk_result["success"]:
+                    for node_data in chunk_result["nodes"]:
+                        # 중복 제거
+                        if node_data["title"] not in seen_titles:
+                            seen_titles.add(node_data["title"])
+                            all_nodes.append(node_data)
+                else:
+                    result["errors"].append(chunk_result["error"])
+        
+        logger.info(f"병렬 처리 완료: {len(all_nodes)}개 노드 추출됨")
         
         result["steps"].append({
             "step": 2,
-            "name": "Node Extraction",
+            "name": "Node Extraction (Parallel)",
             "success": True,
-            "nodes_extracted": len(all_nodes)
+            "nodes_extracted": len(all_nodes),
+            "workers_used": max_workers
         })
         
         if not all_nodes:
@@ -113,7 +218,7 @@ def process_ingestion(
         )
         
         nodes_for_clustering = [
-            {"title": node.title, "description": node.description or ""}
+            {"title": node["title"], "description": node["description"]}
             for node in all_nodes
         ]
         
@@ -131,9 +236,26 @@ def process_ingestion(
         # =================================================================
         self.update_state(state='PROGRESS', meta={'step': 4, 'message': 'DB 저장 중...'})
         
+        from knowledge.models import TrackType
+        
+        # 사투리/방언 도메인 키워드 (TRACK_B)
+        DIALECT_KEYWORDS = [
+            '사투리', '방언', '경상도', '전라도', '억양', '민속',
+            '무당', '택호', '호칭', '전남', '전북', '경북', '경남',
+            '충청', '제주', '강원', '지역어', '토속어'
+        ]
+        
+        def get_track_type(title: str, tags: list) -> str:
+            """제목/태그 기반으로 track_type 결정"""
+            text = (title + ' ' + ' '.join(tags or [])).lower()
+            for keyword in DIALECT_KEYWORDS:
+                if keyword in text:
+                    return TrackType.TRACK_B
+            return TrackType.TRACK_A
+        
         saved_nodes = []
         for node, cluster in zip(all_nodes, cluster_results):
-            existing = KnowledgeNode.objects.filter(title=node.title).first()
+            existing = KnowledgeNode.objects.filter(title=node["title"]).first()
             
             if existing:
                 if not existing.embedding:
@@ -151,7 +273,13 @@ def process_ingestion(
                 
                 new_node = KnowledgeNode.objects.create(
                     title=node.title,
-                    description=node.description or "",
+                    tags=node.tags,
+                    description=node.description
+                )
+                
+                new_node = KnowledgeNode.objects.create(
+                    title=node["title"],
+                    description=node["description"],
                     cluster_id=cluster.cluster_id,
                     tags=node.tags,
                     track_type=track_type,  # 자동 분류된 track_type 사용
@@ -160,6 +288,7 @@ def process_ingestion(
                 new_node.save()
                 saved_nodes.append(new_node)
                 result["nodes_created"] += 1
+                logger.info(f"노드 저장: {node['title']} (track={track_type})")
         
         result["steps"].append({
             "step": 4,
