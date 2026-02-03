@@ -77,7 +77,7 @@ ROOT_URLCONF = "backend.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / 'templates'],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -198,6 +198,18 @@ Memorylary는 에빙하우스 망각곡선을 기반으로 개인화된 복습 �
         {'name': 'Debug', 'description': '개발/테스트용 디버깅 API (⚠️ 프로덕션 비활성화 권장)'},
     ],
 }
+
+
+# =============================================================================
+# Web Push (VAPID) 설정
+# =============================================================================
+
+# VAPID 키 (서버 식별 및 보안)
+# 실제 프로덕션 환경에서는 반드시 .env 파일에 유효한 키를 설정해야 합니다.
+# 생성 방법: python scripts/generate_vapid_keys.py (추후 제공)
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.getenv('VAPID_PRIVATE_KEY', '')
+VAPID_ADMIN_EMAIL = os.getenv('VAPID_ADMIN_EMAIL', 'mailto:admin@example.com')
 
 
 # =============================================================================

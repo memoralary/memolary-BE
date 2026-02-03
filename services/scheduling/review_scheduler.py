@@ -5,6 +5,7 @@ Review Scheduling Service - 복습 스케줄 관리 및 알림 서비스
 - 테스트 결과 기반 복습 스케줄 자동 생성
 - 수동 복습 스케줄 설정
 - 맥OS 알림 전송
+- Web Push 알림 전송
 - 스케줄 모니터링
 """
 
@@ -35,18 +36,7 @@ class ReviewScheduleService:
         include_past: bool = False,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
-        """
-        사용자의 복습 스케줄 조회
-        
-        Args:
-            user_id: 사용자 ID
-            status: 필터링할 상태 (PENDING, NOTIFIED, COMPLETED, SKIPPED)
-            include_past: 과거 스케줄 포함 여부
-            limit: 최대 조회 수
-            
-        Returns:
-            스케줄 목록
-        """
+        """사용자의 복습 스케줄 조회"""
         from analytics.schedule_models import ReviewSchedule, ScheduleStatus
         
         queryset = ReviewSchedule.objects.filter(user_id=user_id)
@@ -90,19 +80,7 @@ class ReviewScheduleService:
         target_retention: float = None,
         from_time: datetime = None
     ) -> Dict[str, Any]:
-        """
-        분석 결과 기반 복습 스케줄 자동 생성
-        
-        Args:
-            user_id: 사용자 ID
-            k_cs: CS 도메인 망각 계수
-            k_dialect: 사투리 도메인 망각 계수
-            target_retention: 목표 암기율
-            from_time: 기준 시각 (기본: 현재)
-            
-        Returns:
-            생성된 스케줄 정보
-        """
+        """분석 결과 기반 복습 스케줄 자동 생성"""
         from analytics.models import User
         from analytics.schedule_models import ReviewSchedule
         
@@ -174,19 +152,7 @@ class ReviewScheduleService:
         node_id: str = None,
         note: str = ''
     ) -> Dict[str, Any]:
-        """
-        수동 복습 스케줄 생성
-        
-        Args:
-            user_id: 사용자 ID
-            scheduled_at: 복습 예정 시각
-            domain: 도메인 (cs, dialect, all)
-            node_id: 특정 노드 ID (선택)
-            note: 메모
-            
-        Returns:
-            생성된 스케줄 정보
-        """
+        """수동 복습 스케줄 생성"""
         from analytics.models import User
         from analytics.schedule_models import ReviewSchedule
         from knowledge.models import KnowledgeNode
@@ -278,18 +244,7 @@ class MacOSNotificationService:
         subtitle: str = "",
         sound: str = "default"
     ) -> bool:
-        """
-        맥OS 알림 전송
-        
-        Args:
-            title: 알림 제목
-            message: 알림 내용
-            subtitle: 부제목
-            sound: 알림 소리
-            
-        Returns:
-            성공 여부
-        """
+        """맥OS 알림 전송"""
         try:
             # AppleScript를 사용한 알림
             script = f'''
@@ -316,37 +271,6 @@ class MacOSNotificationService:
         except Exception as e:
             logger.exception(f"[MacOS Notification] 오류: {e}")
             return False
-    
-    def send_review_reminder(
-        self,
-        username: str,
-        domain: str,
-        node_title: str = None
-    ) -> bool:
-        """
-        복습 알림 전송
-        
-        Args:
-            username: 사용자 이름
-            domain: 도메인 (cs, dialect)
-            node_title: 노드 제목 (선택)
-        """
-        domain_display = {
-            'cs': 'CS 지식',
-            'dialect': '사투리',
-            'all': '전체'
-        }.get(domain, domain)
-        
-        title = "📚 복습 시간이에요!"
-        
-        if node_title:
-            message = f"{username}님, '{node_title}' 복습할 시간입니다."
-        else:
-            message = f"{username}님, {domain_display} 복습할 시간입니다."
-        
-        subtitle = "Memorylary"
-        
-        return self.send_notification(title, message, subtitle)
 
 
 class ReviewNotificationScheduler:
@@ -357,12 +281,14 @@ class ReviewNotificationScheduler:
     """
     
     def __init__(self):
+        from services.scheduling.web_push_service import WebPushService
         self.schedule_service = ReviewScheduleService()
-        self.notification_service = MacOSNotificationService()
+        self.macos_service = MacOSNotificationService()
+        self.web_push_service = WebPushService()
     
     def check_and_notify(self) -> Dict[str, Any]:
         """
-        알림이 필요한 스케줄 확인 및 알림 전송
+        알림이 필요한 스케줄 확인 및 알림 전송 (MacOS Native + Web Push)
         
         Returns:
             처리 결과
@@ -380,17 +306,46 @@ class ReviewNotificationScheduler:
         
         for schedule in due_schedules:
             try:
-                # 알림 전송
-                success = self.notification_service.send_review_reminder(
-                    username=schedule.user.username,
-                    domain=schedule.domain,
-                    node_title=schedule.node.title if schedule.node else None
+                # 알림 메시지 구성
+                username = schedule.user.username
+                domain_display = {'cs': 'CS 지식', 'dialect': '사투리', 'all': '전체'}.get(schedule.domain, schedule.domain)
+                
+                title = "📚 복습 시간이에요!"
+                message = f"{username}님, {domain_display} 복습할 시간입니다."
+                if schedule.node:
+                    message = f"{username}님, '{schedule.node.title}' 복습할 시간입니다."
+                
+                # 1. MacOS 알림 시도 (로컬 서버용 - Linux 서버에서는 동작 안함)
+                # 에러 로그가 너무 많이 남지 않도록 try-catch 내부에서 처리
+                macos_success = False
+                try:
+                    macos_success = self.macos_service.send_notification(title, message, "Memorylary")
+                except Exception:
+                    pass
+                
+                # 2. Web Push 알림 시도
+                push_url = f"/review?schedule_id={schedule.id}"
+                push_count = self.web_push_service.send_notification(
+                    user_id=schedule.user_id,
+                    title=title,
+                    message=message,
+                    url=push_url,
+                    tag=f"review-{schedule.id}"
                 )
+                
+                # 둘 중 하나라도 성공하면 성공 처리
+                success = macos_success or (push_count > 0)
+                
+                noti_types = []
+                if macos_success: noti_types.append('macos')
+                if push_count > 0: noti_types.append('web_push')
+                
+                type_str = ','.join(noti_types) if noti_types else 'none'
                 
                 # 로그 기록
                 NotificationLog.objects.create(
                     schedule=schedule,
-                    notification_type='macos',
+                    notification_type=type_str,
                     success=success
                 )
                 
@@ -399,13 +354,13 @@ class ReviewNotificationScheduler:
                     schedule.mark_notified()
                     results["notified"].append({
                         "schedule_id": str(schedule.id),
-                        "user": schedule.user.username,
-                        "domain": schedule.domain
+                        "user": username,
+                        "methods": noti_types
                     })
                 else:
                     results["failed"].append({
                         "schedule_id": str(schedule.id),
-                        "error": "Notification send failed"
+                        "error": "All notification methods failed"
                     })
                     
             except Exception as e:

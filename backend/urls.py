@@ -11,6 +11,7 @@ from drf_spectacular.views import (
 )
 
 from knowledge.views import UniverseView, TaskStatusView
+from django.views.generic import TemplateView
 
 urlpatterns = [
     # Admin
@@ -27,4 +28,8 @@ urlpatterns = [
     path("api/v1/debug/", include("debug.urls")),  # 디버깅 API
     path("api/v1/universe/", UniverseView.as_view(), name="universe"),
     path("api/v1/tasks/<str:task_id>/", TaskStatusView.as_view(), name="task-status"),
+
+    # Web Push Test Page
+    path('push-test/', TemplateView.as_view(template_name='push_test.html')),
+    path('sw.js', TemplateView.as_view(template_name='sw.js', content_type='application/javascript')),
 ]
