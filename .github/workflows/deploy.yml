@@ -3,7 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches:
-      - back/feat/17
+      - back/feat/22
   workflow_dispatch:
 
 env:
@@ -39,7 +39,7 @@ jobs:
     name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/back/feat/17'
+    if: github.ref == 'refs/heads/back/feat/22'
     
     steps:
       - name: Checkout code
@@ -62,7 +62,7 @@ jobs:
             # ============================================
             
             PROJECT_DIR=~/memolary-backend
-            BRANCH="back/feat/17"
+            BRANCH="back/feat/22"
             
             echo "🚀 Starting deployment..."
             
@@ -112,10 +112,7 @@ jobs:
             source venv/bin/activate
             
             echo "📦 Installing dependencies..."
-            # pip 캐시 정리 (venv 활성화 후에만!)
             pip cache purge 2>/dev/null || true
-            
-            # 의존성 설치 (조용히 + 프로그레스바 끔)
             pip install -r requirements.txt --quiet --progress-bar off 2>/dev/null
             
             echo "🗃️ Running migrations..."
@@ -137,4 +134,3 @@ jobs:
             echo ""
             echo "🎉 Deployment completed!"
             exit 0
-
