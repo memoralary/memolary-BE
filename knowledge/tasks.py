@@ -141,11 +141,20 @@ def process_ingestion(
                     existing.save(update_fields=['embedding'])
                 saved_nodes.append(existing)
             else:
+                # track_type 자동 분류
+                from services.knowledge.track_classifier import classify_track_type
+                track_type = classify_track_type(
+                    title=node.title,
+                    tags=node.tags,
+                    description=node.description
+                )
+                
                 new_node = KnowledgeNode.objects.create(
                     title=node.title,
                     description=node.description or "",
                     cluster_id=cluster.cluster_id,
                     tags=node.tags,
+                    track_type=track_type,  # 자동 분류된 track_type 사용
                 )
                 new_node.set_embedding(cluster.embedding)
                 new_node.save()
