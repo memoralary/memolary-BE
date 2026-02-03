@@ -272,6 +272,12 @@ def process_ingestion(
                 )
                 
                 new_node = KnowledgeNode.objects.create(
+                    title=node.title,
+                    tags=node.tags,
+                    description=node.description
+                )
+                
+                new_node = KnowledgeNode.objects.create(
                     title=node["title"],
                     description=node["description"],
                     cluster_id=cluster.cluster_id,

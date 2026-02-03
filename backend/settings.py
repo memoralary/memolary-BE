@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     # 우리가 만든 앱 추가
     'knowledge',
     'analytics',
+    'debug',  # 디버깅 API
     
     # 향후 API 개발을 위해 미리 추가
     'rest_framework',
@@ -194,6 +195,7 @@ Memorylary는 에빙하우스 망각곡선을 기반으로 개인화된 복습 �
         {'name': 'Analytics', 'description': '인지 벤치마크 및 분석'},
         {'name': 'Universe', 'description': '3D 시각화 데이터'},
         {'name': 'Tasks', 'description': '비동기 작업 상태'},
+        {'name': 'Debug', 'description': '개발/테스트용 디버깅 API (⚠️ 프로덕션 비활성화 권장)'},
     ],
 }
 
