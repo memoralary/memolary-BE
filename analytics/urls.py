@@ -14,6 +14,10 @@ Analytics URL Configuration
 - POST /api/v1/analytics/schedules/<id>/complete/ - 복습 완료
 - POST /api/v1/analytics/schedules/check-notify/ - 알림 확인/전송
 - GET /api/v1/analytics/schedules/upcoming/ - 다가오는 스케줄
+
+Web Push API 엔드포인트:
+- POST /api/v1/analytics/push/subscribe/ - 구독 등록
+- GET /api/v1/analytics/push/vapid-key/ - 공개키 조회
 """
 
 from django.urls import path
@@ -30,6 +34,8 @@ from analytics.schedule_views import (
     ScheduleCompleteView,
     ScheduleCheckNotifyView,
     ScheduleUpcomingView,
+    PushSubscriptionView,
+    VapidKeyView,
 )
 
 app_name = 'analytics'
@@ -48,4 +54,8 @@ urlpatterns = [
     path('schedules/upcoming/', ScheduleUpcomingView.as_view(), name='schedule-upcoming'),
     path('schedules/<uuid:schedule_id>/', ScheduleDetailView.as_view(), name='schedule-detail'),
     path('schedules/<uuid:schedule_id>/complete/', ScheduleCompleteView.as_view(), name='schedule-complete'),
+    
+    # Web Push API
+    path('push/subscribe/', PushSubscriptionView.as_view(), name='push-subscribe'),
+    path('push/vapid-key/', VapidKeyView.as_view(), name='push-vapid-key'),
 ]

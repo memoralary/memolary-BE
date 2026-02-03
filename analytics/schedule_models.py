@@ -161,7 +161,7 @@ class NotificationLog(models.Model):
         max_length=50,
         default='macos',
         verbose_name='알림 유형',
-        help_text='macos, email, push 등'
+        help_text='macos, web_push, email 등'
     )
     sent_at = models.DateTimeField(auto_now_add=True)
     success = models.BooleanField(default=True)
@@ -174,3 +174,36 @@ class NotificationLog(models.Model):
     
     def __str__(self):
         return f"Notification for {self.schedule} @ {self.sent_at}"
+
+
+class PushSubscription(models.Model):
+    """
+    Web Push 구독 정보
+    
+    브라우저의 PushManager로부터 받은 구독 정보를 저장합니다.
+    """
+    id = models.BigAutoField(primary_key=True)
+    user = models.ForeignKey(
+        'analytics.User',
+        on_delete=models.CASCADE,
+        related_name='push_subscriptions',
+        verbose_name='사용자'
+    )
+    endpoint = models.URLField(max_length=500, verbose_name='엔드포인트')
+    p256dh = models.CharField(max_length=255, verbose_name='P256DH 키')
+    auth = models.CharField(max_length=255, verbose_name='Auth 키')
+    
+    user_agent = models.CharField(max_length=255, blank=True, default='', verbose_name='브라우저 정보')
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Web Push 구독'
+        verbose_name_plural = 'Web Push 구독 목록'
+        unique_together = ['user', 'endpoint']
+        indexes = [
+            models.Index(fields=['user', 'last_used_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.user_agent[:20]}"

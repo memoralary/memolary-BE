@@ -11,6 +11,8 @@ Review Scheduling API Views - 복습 스케줄 관리 API
 - POST /api/v1/analytics/schedules/<id>/complete/ - 복습 완료 표시
 - POST /api/v1/analytics/schedules/check-notify/ - 알림 확인 및 전송
 - GET  /api/v1/analytics/schedules/upcoming/ - 다가오는 스케줄
+- POST /api/v1/analytics/push/subscribe/ - Web Push 구독 등록
+- GET  /api/v1/analytics/push/vapid-key/ - VAPID 공개키 조회
 """
 
 import logging
@@ -375,11 +377,10 @@ class ScheduleCheckNotifyView(APIView):
     
     @extend_schema(
         tags=['Analytics'],
-        summary="알림 확인 및 전송",
+        summary="알림 확인 및 전송 (WebPush / MacOS)",
         description="""
-현재 시점에 복습 시간이 된 스케줄을 확인하고 맥OS 알림을 전송합니다.
-
-⚠️ 이 API는 서버가 맥OS에서 실행 중일 때만 알림이 동작합니다.
+현재 시점에 복습 시간이 된 스케줄을 확인하고 알림을 전송합니다.
+Web Push 구독이 있는 경우 브라우저로, 로컬 서버인 경우 맥북으로 알림을 보냅니다.
         """,
         responses={
             200: {
@@ -448,3 +449,88 @@ class ScheduleUpcomingView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class PushSubscriptionView(APIView):
+    """Web Push 구독 등록"""
+    
+    @extend_schema(
+        tags=['Analytics'],
+        summary="Web Push 구독 등록",
+        description="브라우저의 Push Subscription 정보를 서버에 등록합니다.",
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'user_id': {'type': 'string', 'format': 'uuid'},
+                    'endpoint': {'type': 'string'},
+                    'keys': {
+                        'type': 'object',
+                        'properties': {
+                            'p256dh': {'type': 'string'},
+                            'auth': {'type': 'string'}
+                        }
+                    }
+                },
+                'required': ['user_id', 'endpoint', 'keys']
+            }
+        },
+        responses={201: {'description': '구독 성공'}}
+    )
+    def post(self, request):
+        from analytics.models import User
+        from analytics.schedule_models import PushSubscription
+        
+        user_id = request.data.get('user_id')
+        endpoint = request.data.get('endpoint')
+        keys = request.data.get('keys', {})
+        
+        if not user_id or not endpoint or 'p256dh' not in keys or 'auth' not in keys:
+             return Response(
+                 {"error": "Invalid subscription data. 'user_id', 'endpoint', 'keys.p256dh', 'keys.auth' are required."},
+                 status=status.HTTP_400_BAD_REQUEST
+             )
+
+        try:
+            user = User.objects.get(id=user_id)
+            
+            # 구독 정보 저장 또는 갱신
+            PushSubscription.objects.update_or_create(
+                user=user,
+                endpoint=endpoint,
+                defaults={
+                    'p256dh': keys['p256dh'],
+                    'auth': keys['auth'],
+                    'user_agent': request.META.get('HTTP_USER_AGENT', '')[:255]
+                }
+            )
+            
+            return Response({"status": "subscribed"}, status=status.HTTP_201_CREATED)
+            
+        except User.DoesNotExist:
+             return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.exception(f"구독 처리 오류: {e}")
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class VapidKeyView(APIView):
+    """VAPID 공개키 조회"""
+    
+    @extend_schema(
+        tags=['Analytics'],
+        summary="VAPID 공개키 조회",
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'publicKey': {'type': 'string'}
+                }
+            }
+        }
+    )
+    def get(self, request):
+        from django.conf import settings
+        return Response({
+            "publicKey": settings.VAPID_PUBLIC_KEY
+        }, status=status.HTTP_200_OK)
