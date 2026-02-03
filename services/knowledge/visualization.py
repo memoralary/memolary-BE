@@ -195,49 +195,61 @@ class GalaxyVisualizer:
         Returns:
             VisualizationResult
         """
-        if nodes is None:
-            nodes = self.load_nodes_from_db()
+        # 1. DB에서 전체 노드 로드
+        db_nodes = self.load_nodes_from_db()
+        
+        # 2. 인자로 받은 노드(최신 데이터)와 병합
+        if nodes:
+            # ID 기준 딕셔너리로 변환하여 병합 (Upsert)
+            node_map = {n['id']: n for n in db_nodes}
+            for n in nodes:
+                node_map[n['id']] = n
+            
+            # 다시 리스트로 변환
+            nodes = list(node_map.values())
+            logger.info(f"메모리 노드 병합 완료: 총 {len(nodes)}개 (DB: {len(db_nodes)}, New: {len(nodes) - len(db_nodes)})")
+        else:
+            nodes = db_nodes
         
         if len(nodes) < 2:
             logger.warning("노드가 2개 미만이어서 3D 좌표를 생성할 수 없습니다.")
-            return VisualizationResult(
+            self._result = VisualizationResult(
                 coordinates=[],
                 cluster_centers={},
                 dimensions=(0, 0, 0)
             )
+            return self._result
         
         self._node_data = nodes
         
         # 임베딩 매트릭스 생성
         embeddings = np.array([n['embedding'] for n in nodes])
         
-        # 노드가 적으면 n_neighbors 조정
-        actual_n_neighbors = min(self.n_neighbors, len(nodes) - 1)
-        if actual_n_neighbors < self.n_neighbors:
-            logger.info(f"노드 수가 적어 n_neighbors를 {actual_n_neighbors}로 조정")
-            self._umap = None  # 재생성
-            import umap
-            self._umap = umap.UMAP(
-                n_components=3,
-                n_neighbors=actual_n_neighbors,
-                min_dist=self.min_dist,
-                spread=self.spread,
-                random_state=self.random_state,
-                metric='cosine',
-                init='random' if len(nodes) < 15 else 'spectral'
-            )
-        
-        # UMAP 차원 축소
-        if len(nodes) < 5:
-            logger.info(f"노드 수가 너무 적어 ({len(nodes)}개) 랜덤 좌표를 생성합니다.")
-            coords_3d = np.random.uniform(-1, 1, size=(len(nodes), 3))
+        # [Fix] 데이터가 너무 적으면 UMAP 수행 불가 (k >= N 에러 방지)
+        # N=3, k=3 이면 에러 발생. 최소 4개 이상이어야 3D UMAP 안전.
+        if len(nodes) <= 3:
+            logger.info(f"노드 수({len(nodes)})가 적어 UMAP 대신 랜덤 배치 사용")
+            # -1.0 ~ 1.0 범위 랜덤 생성 후 스케일링
+            coords_3d = (np.random.rand(len(nodes), 3) - 0.5) * 2 * self.scale
         else:
+            # 노드가 적으면 n_neighbors 조정
+            actual_n_neighbors = min(self.n_neighbors, len(nodes) - 1)
+            if actual_n_neighbors < self.n_neighbors:
+                logger.info(f"노드 수가 적어 n_neighbors를 {actual_n_neighbors}로 조정")
+                self._umap = None  # 재생성
+                import umap
+                self._umap = umap.UMAP(
+                    n_components=3,
+                    n_neighbors=actual_n_neighbors,
+                    min_dist=self.min_dist,
+                    spread=self.spread,
+                    random_state=self.random_state,
+                    metric='cosine'
+                )
+            
+            # UMAP 차원 축소
             logger.info("UMAP 3D 변환 중...")
-            try:
-                coords_3d = self.umap.fit_transform(embeddings)
-            except Exception as e:
-                logger.warning(f"UMAP 변환 실패, 랜덤 좌표 사용: {e}")
-                coords_3d = np.random.uniform(-1, 1, size=(len(nodes), 3))
+            coords_3d = self.umap.fit_transform(embeddings)
         
         # 스케일 조정 및 정규화
         coords_3d = self._normalize_and_scale(coords_3d)

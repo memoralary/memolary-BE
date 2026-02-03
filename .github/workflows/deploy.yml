@@ -1,0 +1,140 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - back/build/16
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip --quiet
+          pip install -r requirements.txt --quiet
+      
+      - name: Run tests
+        run: |
+          python manage.py test --verbosity=2
+        env:
+          DJANGO_SETTINGS_MODULE: backend.settings
+          SECRET_KEY: test-secret-key-for-ci
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/back/build/16'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          command_timeout: 30m
+          request_pty: false
+          script_stop: false
+          script: |
+            #!/bin/bash
+            # ============================================
+            # Memolary Backend 배포 스크립트
+            # ============================================
+            
+            PROJECT_DIR=~/memolary-backend
+            BRANCH="back/build/16"
+            
+            echo "🚀 Starting deployment..."
+            
+            # ============================================
+            # 1. 초기 설정 (프로젝트가 없을 때만)
+            # ============================================
+            if [ ! -d "$PROJECT_DIR" ]; then
+              echo "📦 First-time setup..."
+              
+              # 시스템 패키지 (로그 최소화)
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq software-properties-common
+              sudo add-apt-repository -y ppa:deadsnakes/ppa
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq python3.12 python3.12-venv python3.12-dev git redis-server curl
+              
+              # Redis 시작
+              sudo systemctl enable redis-server --quiet
+              sudo systemctl start redis-server
+              
+              # 프로젝트 클론
+              git clone --quiet https://github.com/memoralary/memolary-BE.git "$PROJECT_DIR"
+              cd "$PROJECT_DIR"
+              
+              # 가상환경 생성
+              python3.12 -m venv venv
+              source venv/bin/activate
+              
+              # pip 업그레이드 + CPU PyTorch (조용히)
+              pip install --upgrade pip --quiet
+              pip install torch==2.5.1+cpu --extra-index-url https://download.pytorch.org/whl/cpu --quiet --progress-bar off
+              pip install -r requirements.txt --quiet --progress-bar off
+              
+              echo "✅ Initial setup completed!"
+            fi
+            
+            # ============================================
+            # 2. 배포 (항상 실행)
+            # ============================================
+            cd "$PROJECT_DIR"
+            
+            echo "📥 Fetching latest code..."
+            git fetch origin "$BRANCH" --quiet
+            git reset --hard "origin/$BRANCH" --quiet
+            
+            # 가상환경 활성화 (이후 모든 pip/python 명령에 적용)
+            source venv/bin/activate
+            
+            echo "📦 Installing dependencies..."
+            # pip 캐시 정리 (venv 활성화 후에만!)
+            pip cache purge 2>/dev/null || true
+            
+            # 의존성 설치 (조용히 + 프로그레스바 끔)
+            pip install -r requirements.txt --quiet --progress-bar off 2>/dev/null
+            
+            echo "🗃️ Running migrations..."
+            python manage.py migrate --noinput
+            
+            # ============================================
+            # 3. 서비스 재시작 (systemd)
+            # ============================================
+            echo "🔄 Restarting services..."
+            sudo systemctl restart gunicorn celery
+            
+            sleep 2
+            
+            # 헬스체크
+            echo "🔍 Health check..."
+            sudo systemctl is-active --quiet gunicorn && echo "✅ Gunicorn: active" || echo "❌ Gunicorn: inactive"
+            sudo systemctl is-active --quiet celery && echo "✅ Celery: active" || echo "❌ Celery: inactive"
+            
+            echo ""
+            echo "🎉 Deployment completed!"
+            exit 0
+

@@ -264,15 +264,25 @@ class IngestionView(APIView):
             existing = KnowledgeNode.objects.filter(title=node["title"]).first()
             
             if existing:
+                if not existing.embedding:
+                    existing.set_embedding(cluster.embedding)
+                    existing.save(update_fields=['embedding'])
                 saved_nodes.append(existing)
             else:
-                track_type = get_track_type(node["title"], node.get("tags", []))
+                # track_type 자동 분류
+                from services.knowledge.track_classifier import classify_track_type
+                track_type = classify_track_type(
+                    title=node.title,
+                    tags=node.tags,
+                    description=node.description
+                )
+                
                 new_node = KnowledgeNode.objects.create(
                     title=node["title"],
                     description=node["description"],
                     cluster_id=cluster.cluster_id,
-                    tags=node.get("tags", []),
-                    track_type=track_type,
+                    tags=node.tags,
+                    track_type=track_type,  # 자동 분류된 track_type 사용
                 )
                 new_node.set_embedding(cluster.embedding)
                 new_node.save()
@@ -301,8 +311,20 @@ class IngestionView(APIView):
                 if created:
                     result["edges_created"] += 1
         
+        # 3D 좌표 생성을 위해 데이터 준비 (DB 재조회 방지)
+        vis_nodes = []
+        for n in saved_nodes:
+            emb = n.get_embedding()
+            if emb is not None:
+                vis_nodes.append({
+                    'id': str(n.id),
+                    'title': n.title,
+                    'embedding': emb,
+                    'cluster_id': n.cluster_id
+                })
+
         visualizer = GalaxyVisualizer(scale=100.0)
-        visualizer.generate_coordinates()
+        visualizer.generate_coordinates(nodes=vis_nodes)
         visualizer.save_to_db()
         
         result["status"] = "completed"
