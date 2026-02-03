@@ -45,6 +45,14 @@ DIALECT_TAGS = [
 ]
 
 
+# test_type별 가중치 파라미터
+TEST_TYPE_PARAMS = {
+    "A1_BOTTOM_UP": {"s_weight": 1.10, "k_weight": 1.00},
+    "A2_TOP_DOWN":  {"s_weight": 1.00, "k_weight": 0.85},
+    "B_RECALL":     {"s_weight": 1.00, "k_weight": 1.25}
+}
+
+
 # =============================================================================
 # 결과 데이터 클래스
 # =============================================================================
@@ -366,6 +374,31 @@ class ForgettingCurveGenerator:
             "cs": data.cs,
             "dialect": data.dialect
         }
+    
+    def generate_derived_curve(
+        self,
+        k_base: float,
+        s_base: float,
+        test_type_params: Dict
+    ) -> List[Dict[str, float]]:
+        """
+        파생 망각곡선 계산 (test_type별 가중치 적용)
+        R(t) = S_eff * exp(-k_eff * t)
+        """
+        s_eff = s_base * test_type_params['s_weight']
+        k_eff = max(k_base * test_type_params['k_weight'], 0.0001)  # k는 양수 유지
+        
+        curve_data = []
+        for t in self.time_points:
+            # S * exp(-kt)
+            retention = s_eff * math.exp(-k_eff * t)
+            
+            # 소수점 3자리 정규화
+            curve_data.append({
+                "t": t,
+                "retention": round(retention, 3)
+            })
+        return curve_data
 
 
 # =============================================================================
@@ -1058,6 +1091,24 @@ class BenchmarkReporter:
         curve_generator = ForgettingCurveGenerator()
         forgetting_curve = curve_generator.to_dict(k_cs, k_dialect)
         
+        # test_type별 파생 망각곡선 계산
+        test_type_curves = {}
+        # 도메인별 반복: cs, dialect
+        analysis_map = {
+            'cs': result.cs_analysis, 
+            'dialect': result.dialect_analysis
+        }
+        
+        for domain_key, analysis in analysis_map.items():
+            domain_curves = {}
+            for test_type, params in TEST_TYPE_PARAMS.items():
+                domain_curves[test_type] = curve_generator.generate_derived_curve(
+                    k_base=analysis.forgetting_k,
+                    s_base=analysis.encoding_strength,
+                    test_type_params=params
+                )
+            test_type_curves[domain_key] = domain_curves
+        
         return {
             'summary': {
                 'user_id': result.user_id,
@@ -1072,7 +1123,11 @@ class BenchmarkReporter:
             # =========================================================
             # 망각곡선 시각화 데이터 (프론트엔드 그래프용)
             # =========================================================
+            # =========================================================
+            # 망각곡선 시각화 데이터 (프론트엔드 그래프용)
+            # =========================================================
             'forgetting_curve': forgetting_curve,
+            'test_type_curves': test_type_curves,
             
             # =========================================================
             # 복습 타이밍 시각화 정보
