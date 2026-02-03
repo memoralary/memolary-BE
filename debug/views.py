@@ -712,11 +712,15 @@ class QuickBenchmarkView(APIView):
         cs_nodes = list(KnowledgeNode.objects.filter(track_type=TrackType.TRACK_A)[:nodes_per_domain])
         dialect_nodes = list(KnowledgeNode.objects.filter(track_type=TrackType.TRACK_B)[:nodes_per_domain])
         
-        if not cs_nodes or not dialect_nodes:
-            return Response(
-                {"error": "노드가 부족합니다. 먼저 /seed/ API로 데이터를 생성하세요."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        # 노드가 부족하면 자동으로 seed 실행
+        if len(cs_nodes) < nodes_per_domain or len(dialect_nodes) < nodes_per_domain:
+            logger.info("[QuickBenchmark] 노드 부족 - 자동 seed 실행")
+            seed_view = SeedDataView()
+            seed_view.post(request)
+            
+            # 노드 다시 조회
+            cs_nodes = list(KnowledgeNode.objects.filter(track_type=TrackType.TRACK_A)[:nodes_per_domain])
+            dialect_nodes = list(KnowledgeNode.objects.filter(track_type=TrackType.TRACK_B)[:nodes_per_domain])
         
         all_nodes = cs_nodes + dialect_nodes
         
