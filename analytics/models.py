@@ -13,6 +13,9 @@ from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models import Avg
 
+# 복습 스케줄 모델 (별도 파일에서 정의)
+from analytics.schedule_models import ReviewSchedule, NotificationLog, ScheduleStatus
+
 
 # =============================================================================
 # Enums (TextChoices)
