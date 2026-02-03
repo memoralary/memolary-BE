@@ -211,8 +211,8 @@ class GalaxyVisualizer:
         else:
             nodes = db_nodes
         
-        if len(nodes) < 2:
-            logger.warning("노드가 2개 미만이어서 3D 좌표를 생성할 수 없습니다.")
+        if len(nodes) < 1:
+            logger.warning("노드가 없어서 3D 좌표를 생성할 수 없습니다.")
             self._result = VisualizationResult(
                 coordinates=[],
                 cluster_centers={},
