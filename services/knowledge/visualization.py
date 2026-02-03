@@ -195,8 +195,21 @@ class GalaxyVisualizer:
         Returns:
             VisualizationResult
         """
-        if nodes is None:
-            nodes = self.load_nodes_from_db()
+        # 1. DB에서 전체 노드 로드
+        db_nodes = self.load_nodes_from_db()
+        
+        # 2. 인자로 받은 노드(최신 데이터)와 병합
+        if nodes:
+            # ID 기준 딕셔너리로 변환하여 병합 (Upsert)
+            node_map = {n['id']: n for n in db_nodes}
+            for n in nodes:
+                node_map[n['id']] = n
+            
+            # 다시 리스트로 변환
+            nodes = list(node_map.values())
+            logger.info(f"메모리 노드 병합 완료: 총 {len(nodes)}개 (DB: {len(db_nodes)}, New: {len(nodes) - len(db_nodes)})")
+        else:
+            nodes = db_nodes
         
         if len(nodes) < 2:
             logger.warning("노드가 2개 미만이어서 3D 좌표를 생성할 수 없습니다.")
