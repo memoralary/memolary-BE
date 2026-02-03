@@ -63,6 +63,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -235,4 +236,13 @@ CELERY_TASK_TIME_LIMIT = 30 * 60  # 30분 타임아웃
 # CORS 설정 (프론트엔드 연동용)
 # =============================================================================
 
-CORS_ALLOW_ALL_ORIGINS = True  # 개발 환경용 (프로덕션에서는 제한 필요)
+# 방법 1: 백엔드에서 CORS 허용 (권장)
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
+# 또는 개발용으로 모든 origin 허용
+CORS_ALLOW_ALL_ORIGINS = True
