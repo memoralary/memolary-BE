@@ -37,7 +37,7 @@ class OpenAIClient(LLMClient):
         response = client.generate("Hello!")
     """
     
-    DEFAULT_MODEL = "gpt-4o"
+    DEFAULT_MODEL = "gpt-4o-mini"  # 속도 최적화: gpt-4o → gpt-4o-mini
     SUPPORTED_MODELS = [
         "gpt-4o",
         "gpt-4o-mini", 

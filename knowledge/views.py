@@ -160,10 +160,11 @@ class IngestionView(APIView):
                 )
     
     def _process_sync(self, text: Optional[str], file_path: Optional[str]) -> dict:
-        """동기 처리"""
+        """동기 처리 (병렬 청크 처리 적용)"""
         from dotenv import load_dotenv
         load_dotenv()
         
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from services.knowledge.ingestion import IngestionService
         from services.knowledge.extractor import extract_nodes
         from services.knowledge.clustering import ClusteringService
@@ -172,7 +173,7 @@ class IngestionView(APIView):
         
         result = {"status": "processing", "nodes_created": 0, "edges_created": 0}
         
-        service = IngestionService(chunk_size=2000)
+        service = IngestionService(chunk_size=4000)
         if text:
             ingestion_result = service.process(text)
         elif file_path:
@@ -181,15 +182,49 @@ class IngestionView(APIView):
             raise ValueError("텍스트 또는 파일이 필요합니다.")
         
         existing_titles = list(KnowledgeNode.objects.values_list('title', flat=True))
-        all_nodes = []
         
-        for chunk in ingestion_result.chunks:
+        # 병렬 처리 함수
+        def process_chunk(args):
+            chunk, chunk_idx = args
             try:
                 extraction_result = extract_nodes(chunk, existing_titles)
-                all_nodes.extend(extraction_result.nodes)
-                existing_titles.extend([n.title for n in extraction_result.nodes])
+                return {
+                    "chunk_index": chunk_idx,
+                    "nodes": [
+                        {
+                            "title": node.title,
+                            "description": node.description or "",
+                            "tags": node.tags or []
+                        }
+                        for node in extraction_result.nodes
+                    ],
+                    "success": True
+                }
             except Exception as e:
-                logger.warning(f"청크 추출 실패: {e}")
+                logger.warning(f"[청크 {chunk_idx}] 추출 실패: {e}")
+                return {"chunk_index": chunk_idx, "nodes": [], "success": False}
+        
+        # 병렬 처리
+        max_workers = min(8, len(ingestion_result.chunks))
+        chunk_args = [(chunk, idx) for idx, chunk in enumerate(ingestion_result.chunks)]
+        
+        all_nodes = []
+        seen_titles = set(existing_titles)
+        
+        logger.info(f"병렬 처리 시작: {len(chunk_args)}개 청크, {max_workers}개 워커")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_chunk, args): args[1] for args in chunk_args}
+            
+            for future in as_completed(futures):
+                chunk_result = future.result()
+                if chunk_result["success"]:
+                    for node_data in chunk_result["nodes"]:
+                        if node_data["title"] not in seen_titles:
+                            seen_titles.add(node_data["title"])
+                            all_nodes.append(node_data)
+        
+        logger.info(f"병렬 처리 완료: {len(all_nodes)}개 노드 추출됨")
         
         if not all_nodes:
             result["status"] = "completed"
@@ -202,14 +237,31 @@ class IngestionView(APIView):
         )
         
         nodes_for_clustering = [
-            {"title": node.title, "description": node.description or ""}
+            {"title": node["title"], "description": node["description"]}
             for node in all_nodes
         ]
         cluster_results = clustering_service.assign_clusters_batch(nodes_for_clustering)
         
+        from knowledge.models import TrackType
+        
+        # 사투리/방언 도메인 키워드 (TRACK_B)
+        DIALECT_KEYWORDS = [
+            '사투리', '방언', '경상도', '전라도', '억양', '민속',
+            '무당', '택호', '호칭', '전남', '전북', '경북', '경남',
+            '충청', '제주', '강원', '지역어', '토속어'
+        ]
+        
+        def get_track_type(title: str, tags: list) -> str:
+            """제목/태그 기반으로 track_type 결정"""
+            text = (title + ' ' + ' '.join(tags or [])).lower()
+            for keyword in DIALECT_KEYWORDS:
+                if keyword in text:
+                    return TrackType.TRACK_B
+            return TrackType.TRACK_A
+        
         saved_nodes = []
         for node, cluster in zip(all_nodes, cluster_results):
-            existing = KnowledgeNode.objects.filter(title=node.title).first()
+            existing = KnowledgeNode.objects.filter(title=node["title"]).first()
             
             if existing:
                 if not existing.embedding:
@@ -226,8 +278,8 @@ class IngestionView(APIView):
                 )
                 
                 new_node = KnowledgeNode.objects.create(
-                    title=node.title,
-                    description=node.description or "",
+                    title=node["title"],
+                    description=node["description"],
                     cluster_id=cluster.cluster_id,
                     tags=node.tags,
                     track_type=track_type,  # 자동 분류된 track_type 사용
@@ -657,8 +709,6 @@ class RecommendView(APIView):
             source_node = KnowledgeNode.objects.get(id=node_id)
             logger.info(f"[RECOMMEND] 기준 노드: {source_node.title} (id={node_id})")
         except (KnowledgeNode.DoesNotExist, ValidationError, ValueError) as e:
-            # ValidationError/ValueError: invalid UUID format
-            # DoesNotExist: valid UUID but node doesn't exist
             logger.warning(f"[RECOMMEND] 노드 조회 실패: {node_id} - {type(e).__name__}: {e}")
             return Response(
                 {"error": f"invalid or not found node_id: {node_id}"},
@@ -666,70 +716,47 @@ class RecommendView(APIView):
             )
         
         # =====================================================================
-        # Step 3: Outgoing Edge 조회 (source_id = node_id)
-        # prerequisite 관계는 "다음에 배울 개념"을 의미
+        # Step 3: Outgoing Edges (다음에 배울 것들) - source_id = node_id
         # =====================================================================
-        all_outgoing_edges = KnowledgeEdge.objects.filter(source_id=node_id)
-        outgoing_count = all_outgoing_edges.count()
-        logger.info(f"[RECOMMEND] Outgoing edge 전체: {outgoing_count}건")
+        outgoing_edges = KnowledgeEdge.objects.filter(
+            source_id=node_id,
+            relation_type="prerequisite"
+        ).exclude(target_id=node_id).select_related('target').order_by('-confidence', 'id')
         
-        # =====================================================================
-        # Step 4: relation_type="prerequisite" 필터 적용
-        # =====================================================================
-        prerequisite_edges = all_outgoing_edges.filter(relation_type="prerequisite")
-        filtered_count = prerequisite_edges.count()
-        logger.info(f"[RECOMMEND] prerequisite 필터 후: {filtered_count}건")
-        
-        # =====================================================================
-        # Step 5: Self-reference 제외 + confidence 정렬
-        # - self-reference: source_id == target_id인 경우 제외
-        # - 정렬: confidence DESC, id ASC (안정 정렬)
-        # =====================================================================
-        edges_with_targets = prerequisite_edges.exclude(
-            target_id=node_id  # self-reference 명시적 제외
-        ).select_related('target').order_by('-confidence', 'id')
-        
-        # =====================================================================
-        # Step 6: 추천 결과 생성
-        # =====================================================================
-        recommended = []
-        for edge in edges_with_targets[:top_k]:
-            target_node = edge.target
-            confidence_val = float(edge.confidence) if edge.confidence is not None else 1.0
-            
-            recommended.append({
-                "id": str(target_node.id),
-                "title": target_node.title,
-                "confidence": confidence_val,
+        next_topics = []
+        for edge in outgoing_edges[:top_k]:
+            next_topics.append({
+                "id": str(edge.target.id),
+                "title": edge.target.title,
+                "confidence": float(edge.confidence) if edge.confidence else 1.0,
             })
-            
-            # 디버깅: 각 추천 항목 로그
-            logger.info(
-                f"[RECOMMEND] 추천: {target_node.title} "
-                f"(id={target_node.id}, confidence={confidence_val})"
-            )
         
         # =====================================================================
-        # Step 7: 결과가 0개인 경우 원인 로그
+        # Step 4: Incoming Edges (먼저 알아야 할 것들) - target_id = node_id
         # =====================================================================
-        if len(recommended) == 0:
-            if outgoing_count == 0:
-                logger.warning(f"[RECOMMEND] 추천 0건: outgoing edge 없음 (node_id={node_id})")
-            elif filtered_count == 0:
-                logger.warning(
-                    f"[RECOMMEND] 추천 0건: prerequisite 관계 없음 "
-                    f"(outgoing={outgoing_count}건, 모두 다른 relation_type)"
-                )
-            else:
-                logger.warning(
-                    f"[RECOMMEND] 추천 0건: self-reference만 존재 "
-                    f"(prerequisite={filtered_count}건)"
-                )
+        incoming_edges = KnowledgeEdge.objects.filter(
+            target_id=node_id,
+            relation_type="prerequisite"
+        ).exclude(source_id=node_id).select_related('source').order_by('-confidence', 'id')
         
-        logger.info(f"[RECOMMEND] 최종 추천: {[r['id'] for r in recommended]}")
+        prerequisites = []
+        for edge in incoming_edges[:top_k]:
+            prerequisites.append({
+                "id": str(edge.source.id),
+                "title": edge.source.title,
+                "confidence": float(edge.confidence) if edge.confidence else 1.0,
+            })
+        
+        # =====================================================================
+        # Step 5: 로깅
+        # =====================================================================
+        logger.info(f"[RECOMMEND] 다음 학습: {len(next_topics)}건, 선수과목: {len(prerequisites)}건")
         
         return Response({
             "node_id": node_id,
+            "node_title": source_node.title,
             "top_k": top_k,
-            "recommended": recommended
+            "next_topics": next_topics,      # 이 노드를 배운 후 배울 것
+            "prerequisites": prerequisites,  # 이 노드를 배우기 전 알아야 할 것
         })
+
