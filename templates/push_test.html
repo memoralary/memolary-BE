@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Push Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px;
+        }
+
+        button:disabled {
+            background-color: #ccc;
+        }
+
+        #log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            text-align: left;
+            font-family: monospace;
+            white-space: pre-wrap;
+            font-size: 12px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <h1>🔔 Web Push 테스트</h1>
+        <p>아래 버튼을 눌러 알림 권한을 허용하고 구독하세요.</p>
+
+        <div>
+            <label>User ID (UUID):</label><br>
+            <input type="text" id="userId" value="550e8400-e29b-41d4-a716-446655440000"
+                style="padding: 5px; width: 300px; margin: 10px 0;">
+        </div>
+
+        <button id="subscribeBtn">알림 구독하기</button>
+        <button id="createScheduleBtn" style="background-color: #17a2b8; display:none;">1. 테스트 스케줄 생성</button>
+        <button id="testBtn" style="background-color: #28a745; display:none;">2. 테스트 알림 요청</button>
+
+        <div id="log">로그가 여기에 표시됩니다...</div>
+    </div>
+
+    <script>
+        const logDiv = document.getElementById('log');
+        const subscribeBtn = document.getElementById('subscribeBtn');
+        const createScheduleBtn = document.getElementById('createScheduleBtn');
+        const testBtn = document.getElementById('testBtn');
+
+        function log(msg) {
+            logDiv.textContent += '\n' + msg;
+            console.log(msg);
+        }
+
+        // Base64 URL to Uint8Array
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding)
+                .replace(/-/g, '+')
+                .replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        async function subscribe() {
+            try {
+                if (!('serviceWorker' in navigator)) {
+                    throw new Error('Service Worker를 지원하지 않는 브라우저입니다.');
+                }
+
+                // 1. Service Worker 등록
+                log('Registering Service Worker...');
+                const registration = await navigator.serviceWorker.register('/sw.js');
+                await registration.update(); // SW 갱신
+                log('Service Worker Registered & Updated.');
+
+                // 2. VAPID Key 가져오기
+                log('Fetching VAPID Public Key...');
+                const keyRes = await fetch('/api/v1/analytics/push/vapid-key/');
+                const keyData = await keyRes.json();
+                if (!keyData.publicKey) throw new Error('VAPID Key 가져오기 실패');
+
+                const convertedVapidKey = urlBase64ToUint8Array(keyData.publicKey);
+
+                // 3. 브라우저 Push Manager 구독
+                log('Subscribing to Push Manager...');
+                const subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: convertedVapidKey
+                });
+
+                // 4. 서버에 구독 정보 전송
+                const userId = document.getElementById('userId').value;
+                const subJson = subscription.toJSON();
+
+                log('Sending subscription to server...');
+                const res = await fetch('/api/v1/analytics/push/subscribe/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        endpoint: subJson.endpoint,
+                        keys: subJson.keys
+                    })
+                });
+
+                if (res.ok) {
+                    log('✅ 구독 성공!');
+                    subscribeBtn.disabled = true;
+                    subscribeBtn.textContent = "구독 완료됨";
+                    createScheduleBtn.style.display = "inline-block";
+                    testBtn.style.display = "inline-block";
+                } else {
+                    const err = await res.json();
+                    throw new Error('서버 등록 실패: ' + JSON.stringify(err));
+                }
+
+            } catch (e) {
+                log('❌ Error: ' + e.message);
+            }
+        }
+
+        async function createTestSchedule() {
+            try {
+                const userId = document.getElementById('userId').value;
+                // 바로 알림을 받기 위해 10분 전으로 설정 (타임존 차이 고려)
+                const now = new Date();
+                now.setMinutes(now.getMinutes() - 10);
+
+                log('Creating test schedule for: ' + now.toLocaleString());
+
+                const res = await fetch('/api/v1/analytics/schedules/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        scheduled_at: now.toISOString(),
+                        domain: 'cs',
+                        note: 'Web Push Test'
+                    })
+                });
+
+                if (res.ok) {
+                    log('✅ 테스트 스케줄 생성 완료! (10분 전 기준)');
+                } else {
+                    const err = await res.json();
+                    throw new Error(JSON.stringify(err));
+                }
+            } catch (e) {
+                log('Error: ' + e.message);
+            }
+        }
+
+        async function requestTestNotification() {
+            try {
+                log('Checking for due schedules...');
+                const res = await fetch('/api/v1/analytics/schedules/check-notify/', {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                console.log("Check Notify Response:", data);
+
+                if (data.notified && data.notified.length > 0) {
+                    log('🔔 서버 전송 성공! (' + data.notified.length + '건)');
+                    log('상세: ' + JSON.stringify(data.notified));
+                    log('Notice: 브라우저에 알림이 안 뜬다면 OS 알림 설정을 확인하세요.');
+                } else if (data.due_count === 0) {
+                    log('⚠️ 알림 보낼 스케줄이 없습니다. [테스트 스케줄 생성]을 먼저 하세요.');
+                } else {
+                    log('❌ 알림 전송 실패: ' + JSON.stringify(data.failed));
+                }
+            } catch (e) {
+                log('Error: ' + e.message);
+            }
+        }
+
+        subscribeBtn.addEventListener('click', subscribe);
+        createScheduleBtn.addEventListener('click', createTestSchedule);
+        testBtn.addEventListener('click', requestTestNotification);
+    </script>
+</body>
+
+</html>
