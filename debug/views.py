@@ -899,3 +899,53 @@ class MigrateView(APIView):
                 "error": str(e),
                 "detail": traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RebuildDBView(APIView):
+    """DB 완전 초기화 API (SQLite 파일 삭제 후 재생성)"""
+    
+    @extend_schema(
+        tags=['Debug'],
+        summary="DB 완전 재구축 (Factory Reset)",
+        description="SQLite DB 파일을 삭제하고 마이그레이션을 다시 실행합니다. 꼬인 DB 상태를 복구할 때 사용하세요.",
+        responses={200: {'type': 'object', 'properties': {'status': {'type': 'string'}}}}
+    )
+    def post(self, request):
+        import os
+        from django.conf import settings
+        from django.core.management import call_command
+        import io
+        
+        engine = settings.DATABASES['default']['ENGINE']
+        db_path = settings.DATABASES['default']['NAME']
+        
+        if 'sqlite3' not in engine:
+            return Response(
+                {"error": "이 기능은 SQLite 데이터베이스에서만 사용할 수 있습니다."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            # 1. DB 파일 삭제
+            if os.path.exists(db_path):
+                # 파일 닫기 시도 (혹시 열려있을 수 있으므로)
+                from django.db import connection
+                connection.close()
+                os.remove(db_path)
+            
+            # 2. 마이그레이션 실행
+            out = io.StringIO()
+            call_command('migrate', interactive=False, stdout=out)
+            
+            return Response({
+                "status": "success", 
+                "message": "DB가 완전히 초기화되고 재생성되었습니다.",
+                "output": out.getvalue()
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            import traceback
+            return Response({
+                "error": str(e),
+                "detail": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

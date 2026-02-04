@@ -22,6 +22,7 @@ from debug.views import (
     ResetView,
     QuickBenchmarkView,
     MigrateView,
+    RebuildDBView,
 )
 
 urlpatterns = [
@@ -40,4 +41,5 @@ urlpatterns = [
     # 테스트 유틸리티
     path('benchmark/quick/', QuickBenchmarkView.as_view(), name='debug-benchmark-quick'),
     path('migrate/', MigrateView.as_view(), name='debug-migrate'),
+    path('rebuild-db/', RebuildDBView.as_view(), name='debug-rebuild-db'),
 ]
