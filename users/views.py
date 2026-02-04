@@ -21,13 +21,13 @@ class RegisterView(APIView):
         responses={201: UserCreationSerializer}
     )
     def post(self, request):
+        # Request Body(request.data)에서 데이터 파싱 및 검증
         serializer = UserCreationSerializer(data=request.data)
         if serializer.is_valid():
             # 1. Django Auth User 생성
             user = serializer.save()
             
             # 2. Analytics User 생성 (username 공유)
-            # 이미 존재하는지 체크
             if not AnalyticsUser.objects.filter(username=user.username).exists():
                 AnalyticsUser.objects.create(
                     username=user.username,
@@ -75,16 +75,21 @@ class LoginView(APIView):
         }
     )
     def post(self, request):
-        username = request.data.get("username")
-        password = request.data.get("password")
+        # 1. Serializer를 통해 Body 데이터 검증
+        serializer = LoginSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        username = serializer.validated_data['username']
+        password = serializer.validated_data['password']
         
         user = authenticate(username=username, password=password)
         
         if user:
-            # 1. 토큰 발급
+            # 2. 토큰 발급
             token, _ = Token.objects.get_or_create(user=user)
             
-            # 2. Analytics User 정보 조회
+            # 3. Analytics User 정보 조회
             try:
                 analytics_user = AnalyticsUser.objects.get(username=username)
             except AnalyticsUser.DoesNotExist:
@@ -95,7 +100,7 @@ class LoginView(APIView):
                     base_forgetting_k=0.5
                 )
             
-            # 3. 도메인별 망각계수 조회
+            # 4. 도메인별 망각계수 조회
             domain_stats = UserDomainStat.objects.filter(user=analytics_user)
             stats_data = [
                 {
