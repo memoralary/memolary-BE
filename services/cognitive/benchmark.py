@@ -96,34 +96,30 @@ class BenchmarkResult:
 # 복습 스케줄 계산
 # =============================================================================
 
-def calculate_next_review_hours(k: float, target_retention: float) -> float:
+def calculate_next_review_hours(
+    k: float, 
+    target_retention: float,
+    alpha: float = 1.0,
+    illusion: float = 0.0
+) -> float:
     """
     목표 암기율을 만족하는 다음 복습 시점 계산
     
-    에빙하우스 망각 곡선 공식:
-        R(t) = exp(-k * t)
-    
-    역산하여 t를 구함:
-        t = -ln(R_target) / k
+    수정된 지수 감쇠 모델:
+        R(t) = 100 * exp(-[k/I * (1+M)] * t)
+        
+    역산:
+        t = -ln(R_target/100) / (k/I * (1+M))
     
     Args:
-        k: 망각 계수 (단위: 1/hour, k > 0)
-        target_retention: 목표 암기율 (0 < R < 1)
+        k: 망각 계수 (1/day)
+        target_retention: 목표 암기율 (0 < R < 1, e.g. 0.8 = 80%)
+        alpha: 학습 지능 계수 I (기본값 1.0)
+        illusion: 메타인지 착각 계수 M (기본값 0.0)
         
     Returns:
         다음 복습까지의 시간 (hours)
-        
-    Raises:
-        ValueError: k <= 0 또는 target_retention이 (0, 1) 범위 밖일 경우
-        
-    Examples:
-        >>> calculate_next_review_hours(k=0.0213, target_retention=0.8)
-        10.48  # 약 10.5시간 후 복습
-        
-        >>> calculate_next_review_hours(k=0.132, target_retention=0.8)
-        1.69   # 약 1.7시간 후 복습
     """
-    # 입력 검증
     if k <= 0:
         raise ValueError(f"망각 계수 k는 양수여야 합니다: k={k}")
     
@@ -132,9 +128,16 @@ def calculate_next_review_hours(k: float, target_retention: float) -> float:
             f"목표 암기율은 0과 1 사이여야 합니다: target_retention={target_retention}"
         )
     
-    # t = -ln(R_target) / k
-    # ln(0.8) = -0.223, so t = 0.223 / k
-    t_next = -math.log(target_retention) / k
+    # Safety guards
+    safe_alpha = max(alpha, 0.01)         # I가 0 이하면 0.01로 클램핑
+    safe_illusion = max(illusion, -0.99)  # M이 -1 이하면 -0.99로 클램핑
+    
+    # 유효 망각 속도: k_eff = k/I * (1+M)
+    k_effective = (k / safe_alpha) * (1 + safe_illusion)
+    k_effective = max(k_effective, 0.0001)  # 0 이하 방지
+    
+    # t = -ln(R_target) / k_eff
+    t_next = -math.log(target_retention) / k_effective
     
     return t_next
 
@@ -171,7 +174,9 @@ class ReviewScheduleCalculator:
         k_cs: float,
         k_dialect: float,
         target_retention: float = None,
-        from_time: datetime = None
+        from_time: datetime = None,
+        alpha: float = 1.0,
+        illusion: float = 0.0
     ) -> ReviewSchedule:
         """
         도메인별 복습 스케줄 계산
@@ -181,6 +186,8 @@ class ReviewScheduleCalculator:
             k_dialect: 사투리 도메인 망각 계수
             target_retention: 목표 암기율 (기본: 0.8)
             from_time: 기준 시간 (기본: 현재)
+            alpha: 학습 지능 계수 I (기본: 1.0)
+            illusion: 메타인지 착각 계수 M (기본: 0.0)
             
         Returns:
             ReviewSchedule 객체
@@ -191,9 +198,9 @@ class ReviewScheduleCalculator:
         if from_time is None:
             from_time = timezone.now()
         
-        # 각 도메인별 복습 시간 계산
-        cs_hours = calculate_next_review_hours(k_cs, target_retention)
-        dialect_hours = calculate_next_review_hours(k_dialect, target_retention)
+        # 각 도메인별 복습 시간 계산 (alpha, illusion 반영)
+        cs_hours = calculate_next_review_hours(k_cs, target_retention, alpha, illusion)
+        dialect_hours = calculate_next_review_hours(k_dialect, target_retention, alpha, illusion)
         
         # 복습 시각 계산
         cs_datetime = from_time + timedelta(hours=cs_hours)
@@ -1090,12 +1097,18 @@ class BenchmarkReporter:
         k_cs = result.cs_analysis.forgetting_k
         k_dialect = result.dialect_analysis.forgetting_k
         
-        # 복습 스케줄 계산
+        # 사용자 스탯 조회 (결과 객체의 user_id 이용)
+        from analytics.models import User
+        user = User.objects.get(id=result.user_id)
+        
+        # 복습 스케줄 계산 (alpha, illusion 반영)
         schedule_calculator = ReviewScheduleCalculator()
         review_schedule = schedule_calculator.calculate_review_schedule(
             k_cs=k_cs,
             k_dialect=k_dialect,
-            target_retention=target_retention
+            target_retention=target_retention,
+            alpha=user.alpha_user,
+            illusion=user.illusion_avg
         )
         
         # 망각곡선 데이터 생성

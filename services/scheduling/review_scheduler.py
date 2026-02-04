@@ -89,12 +89,18 @@ class ReviewScheduleService:
         
         user = User.objects.get(id=user_id)
         
-        # 복습 스케줄 계산
+        # 사용자의 학습 지능 및 메타인지 착각 가져오기
+        alpha = user.alpha_user
+        illusion = user.illusion_avg
+        
+        # 복습 스케줄 계산 (alpha, illusion 반영)
         schedule = self.calculator.calculate_review_schedule(
             k_cs=k_cs,
             k_dialect=k_dialect,
             target_retention=target_retention,
-            from_time=from_time
+            from_time=from_time,
+            alpha=alpha,
+            illusion=illusion
         )
         
         created_schedules = []

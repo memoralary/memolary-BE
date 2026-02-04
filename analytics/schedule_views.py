@@ -344,25 +344,137 @@ class ScheduleDetailView(APIView):
 
 
 class ScheduleCompleteView(APIView):
-    """복습 완료 표시"""
+    """복습 완료 표시 및 망각 곡선 갱신"""
+    
+    # recall_state → is_correct 변환 매핑
+    RECALL_STATE_MAPPING = {
+        "REMEMBERED": True,
+        "FORGOT": False,
+    }
     
     @extend_schema(
         tags=['Analytics'],
-        summary="복습 완료 표시",
-        description="해당 스케줄의 복습을 완료 처리합니다.",
+        summary="복습 완료 및 결과 제출",
+        description="""
+해당 스케줄의 복습을 완료 처리하고, 결과를 바탕으로 망각 곡선을 갱신합니다.
+
+### 요청 예시
+```json
+{
+    "recall_state": "REMEMBERED",
+    "confidence_score": 0.8,
+    "response_time_ms": 1500
+}
+```
+
+### recall_state
+- `REMEMBERED`: 기억함
+- `FORGOT`: 잊어버림
+
+### 응답
+- 갱신된 `forgetting_k` 및 다음 복습 예정 시간 반환
+        """,
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'recall_state': {'type': 'string', 'enum': ['REMEMBERED', 'FORGOT']},
+                    'confidence_score': {'type': 'number', 'minimum': 0, 'maximum': 1},
+                    'response_time_ms': {'type': 'integer'},
+                },
+                'required': ['recall_state', 'confidence_score']
+            }
+        },
         responses={200: {'type': 'object'}}
     )
     def post(self, request, schedule_id):
         from analytics.schedule_models import ReviewSchedule
+        from analytics.models import User
         
         try:
             schedule = ReviewSchedule.objects.get(id=schedule_id)
+            user = schedule.user
+            domain = schedule.domain
+            
+            # 복습 결과 파싱
+            recall_state = request.data.get('recall_state')
+            confidence_score = request.data.get('confidence_score', 0.5)
+            response_time_ms = request.data.get('response_time_ms', 0)
+            
+            # recall_state 유효성 검증
+            if recall_state and recall_state not in self.RECALL_STATE_MAPPING:
+                return Response(
+                    {"error": f"Invalid recall_state: {recall_state}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            is_correct = self.RECALL_STATE_MAPPING.get(recall_state, True)
+            
+            # 스케줄 완료 처리
             schedule.mark_completed()
+            
+            # =========================================================
+            # 망각 곡선 갱신 로직
+            # =========================================================
+            domain_stat = user.get_domain_stat(domain)
+            old_k = domain_stat.forgetting_k
+            
+            # 착각 지수 계산: confidence - 실제 정답 여부
+            actual_score = 1.0 if is_correct else 0.0
+            illusion_delta = confidence_score - actual_score
+            
+            # 망각 상수 조정
+            # - 맞춤: k를 소폭 감소 (망각이 느려짐)
+            # - 틀림: k를 소폭 증가 (망각이 빨라짐)
+            adjustment_rate = 0.05  # 조정 폭
+            if is_correct:
+                new_k = old_k * (1 - adjustment_rate)
+            else:
+                new_k = old_k * (1 + adjustment_rate * 2)  # 틀리면 더 큰 폭으로 증가
+            
+            # 범위 제한 (0.01 ~ 5.0)
+            new_k = max(0.01, min(new_k, 5.0))
+            
+            # DB 저장
+            domain_stat.forgetting_k = new_k
+            domain_stat.save(update_fields=['forgetting_k', 'updated_at'])
+            
+            # 사용자 illusion_avg 업데이트 (이동 평균)
+            old_illusion = user.illusion_avg
+            new_illusion = old_illusion * 0.9 + illusion_delta * 0.1
+            user.illusion_avg = new_illusion
+            user.save(update_fields=['illusion_avg'])
+            
+            # =========================================================
+            # 다음 복습 시간 계산
+            # =========================================================
+            from services.cognitive.benchmark import calculate_next_review_hours
+            next_review_hours = calculate_next_review_hours(
+                k=new_k,
+                target_retention=0.8,
+                alpha=user.alpha_user,
+                illusion=new_illusion
+            )
             
             return Response({
                 "id": str(schedule.id),
                 "status": schedule.status,
-                "completed_at": schedule.completed_at.isoformat()
+                "completed_at": schedule.completed_at.isoformat(),
+                "domain": domain,
+                "review_result": {
+                    "is_correct": is_correct,
+                    "confidence_score": confidence_score,
+                    "illusion_delta": round(illusion_delta, 3)
+                },
+                "updated_stats": {
+                    "old_k": round(old_k, 4),
+                    "new_k": round(new_k, 4),
+                    "illusion_avg": round(new_illusion, 3)
+                },
+                "next_review": {
+                    "hours": round(next_review_hours, 2),
+                    "label": f"{next_review_hours:.1f}시간 후"
+                }
             }, status=status.HTTP_200_OK)
             
         except ReviewSchedule.DoesNotExist:
