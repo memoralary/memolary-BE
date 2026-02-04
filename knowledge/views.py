@@ -787,10 +787,34 @@ class GenerateQuizView(APIView):
     )
     def get(self, request, node_id):
         node = get_object_or_404(KnowledgeNode, id=node_id)
+        
+        # 1. DB에 저장된 퀴즈가 있는지 확인
+        # related_name='quizzes' 사용
+        quiz = node.quizzes.first()
+        if quiz:
+            return Response({
+                "question": quiz.question,
+                "options": quiz.options,
+                "answer_index": quiz.answer_index,
+                "explanation": quiz.explanation
+            })
+            
+        # 2. 없으면 실시간 생성 및 저장 (Lazy Generation)
         try:
             generator = QuizGenerator()
-            quiz = generator.generate_multiple_choice(node)
-            return Response(quiz)
+            quiz_data = generator.generate_multiple_choice(node)
+            
+            # DB 저장
+            from knowledge.models import KnowledgeQuiz
+            KnowledgeQuiz.objects.create(
+                node=node,
+                question=quiz_data['question'],
+                options=quiz_data['options'],
+                answer_index=quiz_data['answer_index'],
+                explanation=quiz_data.get('explanation', '')
+            )
+            
+            return Response(quiz_data)
         except Exception as e:
             logger.error(f"Quiz generation failed: {e}")
             return Response({"error": "Failed to generate quiz"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
