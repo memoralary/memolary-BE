@@ -13,6 +13,7 @@ from knowledge.views import (
     GenerateQuizView,
     QuizSetView,
     NodeDetailView,
+    ClusterNodeListView,
 )
 
 urlpatterns = [
@@ -22,6 +23,7 @@ urlpatterns = [
     # CRUD
     path('nodes/', NodeListView.as_view(), name='node-list'),
     path('nodes/<str:pk>/', NodeDetailView.as_view(), name='node-detail'),
+    path('clusters/', ClusterNodeListView.as_view(), name='cluster-list'),
     path('edges/', EdgeListView.as_view(), name='edge-list'),
     
     # Recommend (GNN Integration)
