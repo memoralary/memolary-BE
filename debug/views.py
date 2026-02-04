@@ -612,49 +612,128 @@ class ResetView(APIView):
         }
     )
     def post(self, request):
-        confirm = request.data.get('confirm', False)
-        
-        if not confirm:
-            return Response(
-                {"error": "초기화를 실행하려면 confirm: true를 전송하세요."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Clear
-        clear_view = ClearDataView()
-        clear_request = request._request
-        clear_request.data = {'target': 'all', 'confirm': True}
-        
-        from knowledge.models import KnowledgeNode, KnowledgeEdge
-        from analytics.models import User, TestSession, TestResult
-        
-        cleared = {
-            'test_results': TestResult.objects.count(),
-            'sessions': TestSession.objects.count(),
-            'users': User.objects.count(),
-            'edges': KnowledgeEdge.objects.count(),
-            'nodes': KnowledgeNode.objects.count(),
-        }
-        
-        TestResult.objects.all().delete()
-        TestSession.objects.all().delete()
-        User.objects.all().delete()
-        KnowledgeEdge.objects.all().delete()
-        KnowledgeNode.objects.all().delete()
-        
-        # Seed
-        seed_view = SeedDataView()
-        seed_request = request
-        seed_request.data = {'include_users': True, 'include_edges': True, 'user_count': 3}
-        seed_response = seed_view.post(seed_request)
-        
-        logger.warning(f"[Reset] 전체 초기화 완료")
-        
-        return Response({
-            "cleared": cleared,
-            "seeded": seed_response.data,
-            "message": "전체 초기화 완료",
-        }, status=status.HTTP_200_OK)
+        try:
+            confirm = request.data.get('confirm', False)
+            
+            if not confirm:
+                return Response(
+                    {"error": "초기화를 실행하려면 confirm: true를 전송하세요."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # 1. Clear Data
+            from knowledge.models import KnowledgeNode, KnowledgeEdge, KnowledgeQuiz
+            from analytics.models import User, TestSession, TestResult
+            
+            deleted_counts = {
+                'quizzes': KnowledgeQuiz.objects.count(),
+                'test_results': TestResult.objects.count(),
+                'sessions': TestSession.objects.count(),
+                'users': User.objects.count(),
+                'edges': KnowledgeEdge.objects.count(),
+                'nodes': KnowledgeNode.objects.count(),
+            }
+            
+            # Cascade 삭제가 일어나지만 명시적으로 호출
+            KnowledgeQuiz.objects.all().delete()
+            TestResult.objects.all().delete()
+            TestSession.objects.all().delete()
+            User.objects.all().delete()
+            KnowledgeEdge.objects.all().delete()
+            KnowledgeNode.objects.all().delete()
+            
+            # 2. Seed Data
+            from knowledge.models import TrackType, RelationType
+            
+            seed_stats = {
+                "nodes_created": 0,
+                "edges_created": 0,
+                "users_created": 0,
+                "sessions_created": 0,
+            }
+            
+            created_nodes = []
+            
+            # CS 노드 생성
+            for node_data in SeedDataView.CS_SAMPLE_NODES:
+                node, created = KnowledgeNode.objects.get_or_create(
+                    title=node_data["title"],
+                    defaults={
+                        "description": node_data["description"],
+                        "tags": node_data["tags"],
+                        "track_type": TrackType.TRACK_A,
+                    }
+                )
+                if created:
+                    seed_stats["nodes_created"] += 1
+                    created_nodes.append(node)
+                    
+            # Dialect 노드 생성
+            for node_data in SeedDataView.DIALECT_SAMPLE_NODES:
+                node, created = KnowledgeNode.objects.get_or_create(
+                    title=node_data["title"],
+                    defaults={
+                        "description": node_data["description"],
+                        "tags": node_data["tags"],
+                        "track_type": TrackType.TRACK_B,
+                    }
+                )
+                if created:
+                    seed_stats["nodes_created"] += 1
+                    created_nodes.append(node)
+                    
+            # Edges 생성
+            if len(created_nodes) >= 2:
+                for i in range(len(created_nodes) - 1):
+                    _, created = KnowledgeEdge.objects.get_or_create(
+                        source=created_nodes[i],
+                        target=created_nodes[i + 1],
+                        relation_type=RelationType.PREREQUISITE,
+                        defaults={"confidence": 0.8, "is_prerequisite": True}
+                    )
+                    if created:
+                        seed_stats["edges_created"] += 1
+                        
+            # Users & Sessions 생성
+            target_user_count = 3
+            for i in range(target_user_count):
+                user, created = User.objects.get_or_create(
+                    username=f"test_user_{i+1}",
+                    defaults={
+                        "alpha_user": random.uniform(0.8, 1.2),
+                        "base_forgetting_k": random.uniform(0.3, 0.7),
+                    }
+                )
+                if created:
+                    seed_stats["users_created"] += 1
+                    
+                    # Sessions
+                    now = timezone.now()
+                    for tp, minutes in [('T0', 0), ('T1', 10), ('T2', 60), ('T3', 1440)]:
+                        TestSession.objects.get_or_create(
+                            user=user,
+                            time_point=tp,
+                            defaults={"scheduled_at": now + timedelta(minutes=minutes)}
+                        )
+                        seed_stats["sessions_created"] += 1
+
+            logger.warning(f"[Reset] 전체 초기화 완료: {deleted_counts}")
+            
+            return Response({
+                "cleared": deleted_counts,
+                "seeded": seed_stats,
+                "message": "전체 초기화 완료",
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"Reset API Error: {str(e)}"
+            logger.error(error_msg)
+            logger.error(traceback.format_exc())
+            return Response({
+                "error": str(e),
+                "detail": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================
@@ -774,3 +853,99 @@ class QuickBenchmarkView(APIView):
         result["message"] = f"벤치마크 테스트 데이터 생성 완료"
         
         return Response(result, status=status.HTTP_201_CREATED)
+
+
+class MigrateView(APIView):
+    """DB 마이그레이션 수동 실행 API"""
+    
+    @extend_schema(
+        tags=['Debug'],
+        summary="DB 마이그레이션 실행",
+        description="django migrate 명령어를 수동으로 실행합니다.",
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'app_label': {'type': 'string', 'description': '특정 앱만 마이그레이션 (예: knowledge)'},
+                    'fake': {'type': 'boolean', 'default': False, 'description': '가짜 마이그레이션 (--fake)'},
+                }
+            }
+        },
+        responses={200: {'type': 'object', 'properties': {'status': {'type': 'string'}}}}
+    )
+    def post(self, request):
+        from django.core.management import call_command
+        import io
+        
+        app_label = request.data.get('app_label')
+        fake = request.data.get('fake', False)
+        
+        args = []
+        if app_label:
+            args.append(app_label)
+            
+        options = {'interactive': False}
+        if fake:
+            options['fake'] = True
+            
+        try:
+            out = io.StringIO()
+            # stderr도 캡처하기 위해 별도 처리나 try-except가 중요함
+            call_command('migrate', *args, stdout=out, **options)
+            return Response({"status": "success", "output": out.getvalue()}, status=status.HTTP_200_OK)
+        except Exception as e:
+            import traceback
+            return Response({
+                "error": str(e),
+                "detail": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RebuildDBView(APIView):
+    """DB 완전 초기화 API (SQLite 파일 삭제 후 재생성)"""
+    
+    @extend_schema(
+        tags=['Debug'],
+        summary="DB 완전 재구축 (Factory Reset)",
+        description="SQLite DB 파일을 삭제하고 마이그레이션을 다시 실행합니다. 꼬인 DB 상태를 복구할 때 사용하세요.",
+        responses={200: {'type': 'object', 'properties': {'status': {'type': 'string'}}}}
+    )
+    def post(self, request):
+        import os
+        from django.conf import settings
+        from django.core.management import call_command
+        import io
+        
+        engine = settings.DATABASES['default']['ENGINE']
+        db_path = settings.DATABASES['default']['NAME']
+        
+        if 'sqlite3' not in engine:
+            return Response(
+                {"error": "이 기능은 SQLite 데이터베이스에서만 사용할 수 있습니다."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            # 1. DB 파일 삭제
+            if os.path.exists(db_path):
+                # 파일 닫기 시도 (혹시 열려있을 수 있으므로)
+                from django.db import connection
+                connection.close()
+                os.remove(db_path)
+            
+            # 2. 마이그레이션 실행
+            out = io.StringIO()
+            call_command('migrate', interactive=False, stdout=out)
+            
+            return Response({
+                "status": "success", 
+                "message": "DB가 완전히 초기화되고 재생성되었습니다.",
+                "output": out.getvalue()
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            import traceback
+            return Response({
+                "error": str(e),
+                "detail": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

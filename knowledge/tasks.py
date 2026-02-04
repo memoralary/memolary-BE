@@ -372,6 +372,45 @@ def process_ingestion(
         })
         
         # =================================================================
+        # 7단계: 퀴즈 생성
+        # =================================================================
+        self.update_state(state='PROGRESS', meta={'step': 7, 'message': '지식 퀴즈 생성 중...'})
+        
+        from services.knowledge.quiz import QuizGenerator
+        from knowledge.models import KnowledgeQuiz
+        
+        quiz_gen = QuizGenerator()
+        quizzes_created = 0
+        
+        # 새로 생성된 노드들에 대해 퀴즈 생성
+        for node in saved_nodes:
+            try:
+                # 이미 퀴즈가 있는지 확인
+                if KnowledgeQuiz.objects.filter(node=node).exists():
+                    continue
+
+                quiz_data = quiz_gen.generate_multiple_choice(node)
+                
+                KnowledgeQuiz.objects.create(
+                    node=node,
+                    question=quiz_data['question'],
+                    options=quiz_data['options'],
+                    answer_index=quiz_data['answer_index'],
+                    explanation=quiz_data.get('explanation', '')
+                )
+                quizzes_created += 1
+                logger.info(f"퀴즈 생성 완료: {node.title}")
+            except Exception as e:
+                logger.warning(f"퀴즈 생성 실패 ({node.title}): {e}")
+        
+        result["steps"].append({
+            "step": 7,
+            "name": "Quiz Generation",
+            "success": True,
+            "quizzes_generated": quizzes_created
+        })
+
+        # =================================================================
         # 완료
         # =================================================================
         result["status"] = "completed"

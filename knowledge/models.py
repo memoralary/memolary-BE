@@ -417,3 +417,45 @@ class KnowledgeEdge(models.Model):
             target=self.source,
             relation_type=self.relation_type
         ).exists()
+
+
+# =============================================================================
+# [4] 퀴즈 모델 (Generated Quizzes)
+# =============================================================================
+
+class KnowledgeQuiz(models.Model):
+    """
+    지식 노드에 대해 생성된 4지 선다 퀴즈
+    
+    LLM에 의해 미리 생성되어 저장되며, 학습 시 활용됩니다.
+    """
+    node = models.ForeignKey(
+        KnowledgeNode, 
+        on_delete=models.CASCADE, 
+        related_name='quizzes',
+        verbose_name='관련 지식 노드'
+    )
+    question = models.TextField(verbose_name="문제 내용")
+    options = models.JSONField(
+        default=list, 
+        verbose_name="보기 목록", 
+        help_text="4개의 문자열 보기 리스트"
+    )
+    answer_index = models.IntegerField(
+        verbose_name="정답 인덱스", 
+        help_text="0 ~ 3 사이의 정수"
+    )
+    explanation = models.TextField(
+        blank=True, 
+        default="", 
+        verbose_name="해설"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = '지식 퀴즈'
+        verbose_name_plural = '지식 퀴즈 목록'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Quiz for {self.node.title}: {self.question[:30]}..."

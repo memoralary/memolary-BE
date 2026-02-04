@@ -45,15 +45,15 @@ urlpatterns = [
     path('benchmark/initialize/', BenchmarkInitializeView.as_view(), name='benchmark-initialize'),
     path('benchmark/submit/', BenchmarkSubmitView.as_view(), name='benchmark-submit'),
     path('benchmark/analyze/', BenchmarkAnalyzeView.as_view(), name='benchmark-analyze'),
-    path('benchmark/status/<uuid:user_id>/', BenchmarkStatusView.as_view(), name='benchmark-status'),
+    path('benchmark/status/<str:user_id>/', BenchmarkStatusView.as_view(), name='benchmark-status'),
     
     # 복습 스케줄 API
     path('schedules/', ScheduleListView.as_view(), name='schedule-list'),
     path('schedules/auto/', ScheduleAutoCreateView.as_view(), name='schedule-auto-create'),
     path('schedules/check-notify/', ScheduleCheckNotifyView.as_view(), name='schedule-check-notify'),
     path('schedules/upcoming/', ScheduleUpcomingView.as_view(), name='schedule-upcoming'),
-    path('schedules/<uuid:schedule_id>/', ScheduleDetailView.as_view(), name='schedule-detail'),
-    path('schedules/<uuid:schedule_id>/complete/', ScheduleCompleteView.as_view(), name='schedule-complete'),
+    path('schedules/<str:schedule_id>/', ScheduleDetailView.as_view(), name='schedule-detail'),
+    path('schedules/<str:schedule_id>/complete/', ScheduleCompleteView.as_view(), name='schedule-complete'),
     
     # Web Push API
     path('push/subscribe/', PushSubscriptionView.as_view(), name='push-subscribe'),
