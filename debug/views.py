@@ -862,15 +862,40 @@ class MigrateView(APIView):
         tags=['Debug'],
         summary="DB 마이그레이션 실행",
         description="django migrate 명령어를 수동으로 실행합니다.",
+        request={
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'app_label': {'type': 'string', 'description': '특정 앱만 마이그레이션 (예: knowledge)'},
+                    'fake': {'type': 'boolean', 'default': False, 'description': '가짜 마이그레이션 (--fake)'},
+                }
+            }
+        },
         responses={200: {'type': 'object', 'properties': {'status': {'type': 'string'}}}}
     )
     def post(self, request):
         from django.core.management import call_command
         import io
         
+        app_label = request.data.get('app_label')
+        fake = request.data.get('fake', False)
+        
+        args = []
+        if app_label:
+            args.append(app_label)
+            
+        options = {'interactive': False}
+        if fake:
+            options['fake'] = True
+            
         try:
             out = io.StringIO()
-            call_command('migrate', interactive=False, stdout=out)
+            # stderr도 캡처하기 위해 별도 처리나 try-except가 중요함
+            call_command('migrate', *args, stdout=out, **options)
             return Response({"status": "success", "output": out.getvalue()}, status=status.HTTP_200_OK)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            import traceback
+            return Response({
+                "error": str(e),
+                "detail": traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
