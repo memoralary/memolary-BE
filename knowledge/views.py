@@ -581,6 +581,25 @@ class NodeListView(APIView):
         return Response({"count": len(data), "nodes": data})
 
 
+
+class NodeDetailView(APIView):
+    """
+    GET /api/v1/knowledge/nodes/<uuid:pk>/
+    노드 상세 조회 (퀴즈 포함)
+    """
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="노드 상세 조회",
+        description="노드 상세 정보와 연관된 퀴즈를 조회합니다.",
+        responses={200: OpenApiTypes.OBJECT}
+    )
+    def get(self, request, pk):
+        from knowledge.serializers import KnowledgeNodeDetailSerializer
+        node = get_object_or_404(KnowledgeNode.objects.prefetch_related('quizzes'), pk=pk)
+        serializer = KnowledgeNodeDetailSerializer(node)
+        return Response(serializer.data)
+
+
 class EdgeListView(APIView):
     """GET /api/v1/knowledge/edges/"""
     

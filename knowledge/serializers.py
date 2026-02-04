@@ -3,7 +3,7 @@ Knowledge API Serializers
 """
 
 from rest_framework import serializers
-from knowledge.models import KnowledgeNode, KnowledgeEdge
+from knowledge.models import KnowledgeNode, KnowledgeEdge, KnowledgeQuiz
 
 
 class KnowledgeNodeSerializer(serializers.ModelSerializer):
@@ -17,6 +17,33 @@ class KnowledgeNodeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at']
 
+
+class KnowledgeQuizSerializer(serializers.ModelSerializer):
+    """퀴즈 시리얼라이저"""
+    class Meta:
+        model = KnowledgeQuiz
+        fields = ['id', 'question', 'options', 'answer_index', 'explanation', 'created_at']
+
+
+class KnowledgeNodeDetailSerializer(serializers.ModelSerializer):
+    """노드 상세 조회용 시리얼라이저 (퀴즈 포함)"""
+    quiz = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = KnowledgeNode
+        fields = [
+            'id', 'title', 'description', 'cluster_id',
+            'x', 'y', 'z', 'tags', 'created_at',
+            'quiz'
+        ]
+        read_only_fields = ['id', 'created_at']
+        
+    def get_quiz(self, obj):
+        # 가장 최신 퀴즈 하나만 반환
+        quiz = obj.quizzes.first()
+        if quiz:
+            return KnowledgeQuizSerializer(quiz).data
+        return None
 
 class KnowledgeEdgeSerializer(serializers.ModelSerializer):
     """엣지 시리얼라이저"""
