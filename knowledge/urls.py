@@ -10,6 +10,7 @@ from knowledge.views import (
     NodeListView,
     EdgeListView,
     RecommendView,
+    GenerateQuizView,
 )
 
 urlpatterns = [
@@ -22,4 +23,6 @@ urlpatterns = [
     
     # Recommend (GNN Integration)
     path('recommend/', RecommendView.as_view(), name='recommend'),
+    # Quiz
+    path('nodes/<uuid:node_id>/quiz/', GenerateQuizView.as_view(), name='generate-quiz'),
 ]

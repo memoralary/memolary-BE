@@ -24,6 +24,8 @@ from drf_spectacular.types import OpenApiTypes
 
 from knowledge.models import KnowledgeNode, KnowledgeEdge
 from knowledge.serializers import IngestionRequestSerializer
+from django.shortcuts import get_object_or_404
+from services.knowledge.quiz import QuizGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -766,3 +768,29 @@ class RecommendView(APIView):
             "prerequisites": prerequisites,  # 이 노드를 배우기 전 알아야 할 것
         })
 
+
+
+# =============================================================================
+# Quiz API
+# =============================================================================
+
+class GenerateQuizView(APIView):
+    """
+    GET /api/v1/knowledge/nodes/<node_id>/quiz/
+    특정 지식 노드에 대한 4지 선다 퀴즈 생성
+    """
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="노드별 퀴즈 생성",
+        description="지식 노드 ID를 기반으로 LLM을 이용해 4지 선다 퀴즈를 생성합니다.",
+        responses={200: OpenApiTypes.OBJECT}
+    )
+    def get(self, request, node_id):
+        node = get_object_or_404(KnowledgeNode, id=node_id)
+        try:
+            generator = QuizGenerator()
+            quiz = generator.generate_multiple_choice(node)
+            return Response(quiz)
+        except Exception as e:
+            logger.error(f"Quiz generation failed: {e}")
+            return Response({"error": "Failed to generate quiz"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
