@@ -793,6 +793,7 @@ class RecommendView(APIView):
 # Quiz API
 # =============================================================================
 
+
 class GenerateQuizView(APIView):
     """
     GET /api/v1/knowledge/nodes/<node_id>/quiz/
@@ -807,33 +808,66 @@ class GenerateQuizView(APIView):
     def get(self, request, node_id):
         node = get_object_or_404(KnowledgeNode, id=node_id)
         
-        # 1. DB에 저장된 퀴즈가 있는지 확인
-        # related_name='quizzes' 사용
-        quiz = node.quizzes.first()
-        if quiz:
-            return Response({
-                "question": quiz.question,
-                "options": quiz.options,
-                "answer_index": quiz.answer_index,
-                "explanation": quiz.explanation
-            })
-            
-        # 2. 없으면 실시간 생성 및 저장 (Lazy Generation)
         try:
             generator = QuizGenerator()
-            quiz_data = generator.generate_multiple_choice(node)
-            
-            # DB 저장
-            from knowledge.models import KnowledgeQuiz
-            KnowledgeQuiz.objects.create(
-                node=node,
-                question=quiz_data['question'],
-                options=quiz_data['options'],
-                answer_index=quiz_data['answer_index'],
-                explanation=quiz_data.get('explanation', '')
-            )
-            
+            # 서비스 계층에서 조회/생성/저장 모두 처리
+            quiz_data = generator.get_or_create_quiz(node)
             return Response(quiz_data)
         except Exception as e:
             logger.error(f"Quiz generation failed: {e}")
             return Response({"error": "Failed to generate quiz"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class QuizSetView(APIView):
+    """
+    GET /api/v1/knowledge/quiz/set/
+    퀴즈 세트 생성 (사전 테스트 / 복습)
+    """
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="퀴즈 세트 생성 (사전 테스트/복습)",
+        description="""
+        여러 문제로 구성된 퀴즈 세트를 생성합니다.
+        
+        ### 파라미터
+        - `mode`: `pretest` (사전 진단, 랜덤) 또는 `review` (복습, 취약점 위주)
+        - `count`: 문제 수 (기본 5, 최대 10)
+        """,
+        parameters=[
+            OpenApiParameter(name='mode', type=str, enum=['pretest', 'review'], default='pretest'),
+            OpenApiParameter(name='count', type=int, default=5)
+        ],
+        responses={200: OpenApiTypes.OBJECT}
+    )
+    def get(self, request):
+        mode = request.query_params.get('mode', 'pretest')
+        try:
+            count = int(request.query_params.get('count', 5))
+            if count > 20: count = 20  # 최대 20개로 상향
+        except ValueError:
+            count = 5
+            
+        # 1. 대상 노드 선정
+        if mode == 'review':
+            # 복습: difficulty_index가 높거나 stability_index가 낮은 노드 우선
+            # (데이터가 없으면 랜덤)
+            nodes = list(KnowledgeNode.objects.order_by('stability_index', '-difficulty_index')[:count])
+            # 만약 노드가 부족하면 랜덤으로 채움? 일단 있는대로.
+        else:
+            # pretest: 랜덤 선정 (또는 연결성 높은 중요 노드)
+            # SQLite는 order_by('?') 지원
+            nodes = list(KnowledgeNode.objects.order_by('?')[:count])
+        
+        if not nodes:
+            return Response({"message": "No nodes available for quiz"}, status=status.HTTP_404_NOT_FOUND)
+            
+        # 2. 퀴즈 생성 (병렬 처리)
+        generator = QuizGenerator()
+        quiz_set = generator.generate_quiz_set(nodes)
+        
+        return Response({
+            "mode": mode,
+            "count": len(quiz_set),
+            "quizzes": quiz_set
+        })
+

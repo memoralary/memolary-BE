@@ -11,6 +11,7 @@ from knowledge.views import (
     EdgeListView,
     RecommendView,
     GenerateQuizView,
+    QuizSetView,
     NodeDetailView,
 )
 
@@ -20,11 +21,12 @@ urlpatterns = [
     
     # CRUD
     path('nodes/', NodeListView.as_view(), name='node-list'),
-    path('nodes/<uuid:pk>/', NodeDetailView.as_view(), name='node-detail'),
+    path('nodes/<str:pk>/', NodeDetailView.as_view(), name='node-detail'),
     path('edges/', EdgeListView.as_view(), name='edge-list'),
     
     # Recommend (GNN Integration)
     path('recommend/', RecommendView.as_view(), name='recommend'),
     # Quiz
-    path('nodes/<uuid:node_id>/quiz/', GenerateQuizView.as_view(), name='generate-quiz'),
+    path('quiz/set/', QuizSetView.as_view(), name='quiz-set'),
+    path('nodes/<str:node_id>/quiz/', GenerateQuizView.as_view(), name='generate-quiz'),
 ]

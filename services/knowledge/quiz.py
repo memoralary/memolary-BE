@@ -1,10 +1,13 @@
 
 import logging
-from typing import Dict, Any, Optional
-from dataclasses import dataclass
+from typing import Dict, Any, Optional, List
+
+from django.db import transaction
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pydantic import BaseModel, Field
 
 from services.llm import get_llm_client, safe_json_parse
-from knowledge.models import KnowledgeNode
+from knowledge.models import KnowledgeNode, KnowledgeQuiz
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +37,6 @@ SYSTEM_PROMPT = """너는 컴퓨터 과학 및 인지과학 분야의 전문가�
 }
 """
 
-from pydantic import BaseModel, Field
-from typing import List
-
 class QuizSchema(BaseModel):
     question: str
     options: List[str]
@@ -51,7 +51,7 @@ class QuizGenerator:
 
     def generate_multiple_choice(self, node: KnowledgeNode) -> Dict[str, Any]:
         """
-        특정 노드에 대한 4지 선다 퀴즈 생성
+        특정 노드에 대한 4지 선다 퀴즈 생성 (LLM 호출 only)
         
         Args:
             node: KnowledgeNode 인스턴스
@@ -88,3 +88,76 @@ class QuizGenerator:
         except Exception as e:
             logger.error(f"퀴즈 생성 중 오류 발생 ({node.title}): {e}")
             raise e
+
+    def get_or_create_quiz(self, node: KnowledgeNode) -> Dict[str, Any]:
+        """
+        노드에 대한 퀴즈를 조회하거나 생성하여 반환 (DB 저장 포함)
+        """
+        # 1. DB 확인
+        existing_quiz = KnowledgeQuiz.objects.filter(node=node).first()
+        if existing_quiz:
+             return {
+                "id": str(existing_quiz.id),
+                "question": existing_quiz.question,
+                "options": existing_quiz.options,
+                "answer_index": existing_quiz.answer_index,
+                "explanation": existing_quiz.explanation
+            }
+
+        # 2. 생성
+        quiz_data = self.generate_multiple_choice(node)
+
+        # 3. 저장
+        try:
+            with transaction.atomic():
+                created_quiz, created = KnowledgeQuiz.objects.get_or_create(
+                    node=node,
+                    defaults={
+                        'question': quiz_data['question'],
+                        'options': quiz_data['options'],
+                        'answer_index': quiz_data['answer_index'],
+                        'explanation': quiz_data.get('explanation', '')
+                    }
+                )
+            quiz_data['id'] = str(created_quiz.id)
+            return quiz_data
+        except Exception as e:
+            logger.error(f"퀴즈 저장 중 오류: {e}")
+            # 이미 생성된 퀴즈가 있어서 에러가 났을 수도 있으므로 (race condition) 다시 조회
+            existing = KnowledgeQuiz.objects.filter(node=node).first()
+            if existing:
+                 return {
+                    "id": str(existing.id),
+                    "question": existing.question,
+                    "options": existing.options,
+                    "answer_index": existing.answer_index,
+                    "explanation": existing.explanation
+                }
+            return quiz_data  # 저장 실패해도 생성된 데이터는 반환
+
+    def generate_quiz_set(self, nodes: List[KnowledgeNode]) -> List[Dict[str, Any]]:
+        """
+        여러 노드에 대한 퀴즈 세트를 병렬로 생성/조회
+        """
+        results = []
+        # Max workers 조정 (API Rate Limit 고려)
+        max_workers = min(10, len(nodes))
+        if max_workers == 0:
+            return []
+            
+        logger.info(f"Generating quiz set for {len(nodes)} nodes with {max_workers} threads")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_node = {executor.submit(self.get_or_create_quiz, node): node for node in nodes}
+            
+            for future in as_completed(future_to_node):
+                node = future_to_node[future]
+                try:
+                    data = future.result()
+                    data['node_id'] = str(node.id)
+                    data['node_title'] = node.title
+                    results.append(data)
+                except Exception as e:
+                    logger.error(f"Error generating quiz for node {node.title}: {e}")
+                    
+        return results
