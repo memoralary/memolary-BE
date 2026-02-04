@@ -22,7 +22,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.types import OpenApiTypes
 
-from knowledge.models import KnowledgeNode, KnowledgeEdge
+from knowledge.models import KnowledgeNode, KnowledgeEdge, KnowledgeCluster
 from knowledge.serializers import IngestionRequestSerializer
 from django.shortcuts import get_object_or_404
 from services.knowledge.quiz import QuizGenerator
@@ -650,6 +650,63 @@ class EdgeListView(APIView):
 # =============================================================================
 # Recommend API (Edge-based Prerequisite Recommendation)
 # =============================================================================
+
+class ClusterNodeListView(APIView):
+    """GET /api/v1/knowledge/clusters/"""
+    
+    @extend_schema(
+        tags=['Knowledge'],
+        summary="클러스터 및 노드 목록 조회",
+        description="지식 그래프의 클러스터 목록과 각 클러스터에 속한 노드 정보를 함께 반환합니다.",
+        responses={
+            200: {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'cluster_id': {'type': 'string'},
+                        'cluster_name': {'type': 'string'},
+                        'nodes': {
+                            'type': 'array',
+                            'items': {
+                                'type': 'object',
+                                'properties': {
+                                    'id': {'type': 'string', 'format': 'uuid'},
+                                    'title': {'type': 'string'},
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
+    def get(self, request):
+        clusters = KnowledgeCluster.objects.all()
+        nodes = KnowledgeNode.objects.values('id', 'title', 'cluster_id')
+        
+        # Group nodes by cluster_id
+        nodes_by_cluster = {}
+        for node in nodes:
+            cid = node['cluster_id']
+            if cid:
+                if cid not in nodes_by_cluster:
+                    nodes_by_cluster[cid] = []
+                nodes_by_cluster[cid].append({
+                    "id": str(node['id']),
+                    "title": node['title']
+                })
+        
+        result = []
+        for cluster in clusters:
+            result.append({
+                "cluster_id": cluster.cluster_id,
+                "cluster_name": cluster.name,
+                "nodes": nodes_by_cluster.get(cluster.cluster_id, [])
+            })
+        
+        return Response(result)
+
 
 class RecommendView(APIView):
     """
