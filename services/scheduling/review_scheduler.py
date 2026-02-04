@@ -78,14 +78,19 @@ class ReviewScheduleService:
         k_cs: float,
         k_dialect: float,
         target_retention: float = None,
-        from_time: datetime = None
+        from_time: datetime = None,
+        cs_node_ids: List[str] = None,
+        dialect_node_ids: List[str] = None
     ) -> Dict[str, Any]:
-        """분석 결과 기반 복습 스케줄 자동 생성"""
+        """분석 결과 기반 복습 스케줄 자동 생성 (노드별, 중복 방지)"""
         from analytics.models import User
-        from analytics.schedule_models import ReviewSchedule
+        from analytics.schedule_models import ReviewSchedule, ScheduleStatus
+        from knowledge.models import KnowledgeNode
         
         target_retention = target_retention or self.DEFAULT_TARGET_RETENTION
         from_time = from_time or timezone.now()
+        cs_node_ids = cs_node_ids or []
+        dialect_node_ids = dialect_node_ids or []
         
         user = User.objects.get(id=user_id)
         
@@ -104,49 +109,140 @@ class ReviewScheduleService:
         )
         
         created_schedules = []
+        skipped_count = 0
         
-        # CS 도메인 스케줄
-        if schedule.cs_review_datetime:
+        # =========================================================
+        # CS 도메인 노드별 스케줄 생성
+        # =========================================================
+        for node_id in cs_node_ids:
+            # 중복 체크: 해당 노드에 이미 PENDING 스케줄이 있으면 스킵
+            existing = ReviewSchedule.objects.filter(
+                user=user,
+                node_id=node_id,
+                status=ScheduleStatus.PENDING
+            ).exists()
+            
+            if existing:
+                skipped_count += 1
+                continue
+            
+            try:
+                node = KnowledgeNode.objects.get(id=node_id)
+            except KnowledgeNode.DoesNotExist:
+                continue
+            
             cs_schedule = ReviewSchedule.objects.create(
                 user=user,
+                node=node,
                 domain='cs',
                 scheduled_at=schedule.cs_review_datetime,
                 target_retention=target_retention,
                 forgetting_k=k_cs,
                 is_manual=False,
-                note=f"자동 생성 - 목표 암기율 {target_retention*100:.0f}%"
+                note=f"자동 생성 - {node.title}"
             )
             created_schedules.append({
                 "id": str(cs_schedule.id),
                 "domain": "cs",
+                "node_id": str(node.id),
+                "node_title": node.title,
                 "scheduled_at": schedule.cs_review_datetime.isoformat(),
                 "hours_from_now": schedule.cs_review_hours,
                 "label": self.calculator.format_hours_to_human_readable(schedule.cs_review_hours)
             })
         
-        # Dialect 도메인 스케줄
-        if schedule.dialect_review_datetime:
+        # =========================================================
+        # Dialect 도메인 노드별 스케줄 생성
+        # =========================================================
+        for node_id in dialect_node_ids:
+            existing = ReviewSchedule.objects.filter(
+                user=user,
+                node_id=node_id,
+                status=ScheduleStatus.PENDING
+            ).exists()
+            
+            if existing:
+                skipped_count += 1
+                continue
+            
+            try:
+                node = KnowledgeNode.objects.get(id=node_id)
+            except KnowledgeNode.DoesNotExist:
+                continue
+            
             dialect_schedule = ReviewSchedule.objects.create(
                 user=user,
+                node=node,
                 domain='dialect',
                 scheduled_at=schedule.dialect_review_datetime,
                 target_retention=target_retention,
                 forgetting_k=k_dialect,
                 is_manual=False,
-                note=f"자동 생성 - 목표 암기율 {target_retention*100:.0f}%"
+                note=f"자동 생성 - {node.title}"
             )
             created_schedules.append({
                 "id": str(dialect_schedule.id),
                 "domain": "dialect",
+                "node_id": str(node.id),
+                "node_title": node.title,
                 "scheduled_at": schedule.dialect_review_datetime.isoformat(),
                 "hours_from_now": schedule.dialect_review_hours,
                 "label": self.calculator.format_hours_to_human_readable(schedule.dialect_review_hours)
             })
         
+        # =========================================================
+        # 노드 ID가 없는 경우: 도메인 레벨 스케줄 (기존 동작 유지)
+        # =========================================================
+        if not cs_node_ids and not dialect_node_ids:
+            # 기존 PENDING 스케줄 체크
+            cs_exists = ReviewSchedule.objects.filter(
+                user=user, domain='cs', status=ScheduleStatus.PENDING, node__isnull=True
+            ).exists()
+            dialect_exists = ReviewSchedule.objects.filter(
+                user=user, domain='dialect', status=ScheduleStatus.PENDING, node__isnull=True
+            ).exists()
+            
+            if not cs_exists and schedule.cs_review_datetime:
+                cs_schedule = ReviewSchedule.objects.create(
+                    user=user,
+                    domain='cs',
+                    scheduled_at=schedule.cs_review_datetime,
+                    target_retention=target_retention,
+                    forgetting_k=k_cs,
+                    is_manual=False,
+                    note=f"자동 생성 - 목표 암기율 {target_retention*100:.0f}%"
+                )
+                created_schedules.append({
+                    "id": str(cs_schedule.id),
+                    "domain": "cs",
+                    "scheduled_at": schedule.cs_review_datetime.isoformat(),
+                    "hours_from_now": schedule.cs_review_hours,
+                    "label": self.calculator.format_hours_to_human_readable(schedule.cs_review_hours)
+                })
+            
+            if not dialect_exists and schedule.dialect_review_datetime:
+                dialect_schedule = ReviewSchedule.objects.create(
+                    user=user,
+                    domain='dialect',
+                    scheduled_at=schedule.dialect_review_datetime,
+                    target_retention=target_retention,
+                    forgetting_k=k_dialect,
+                    is_manual=False,
+                    note=f"자동 생성 - 목표 암기율 {target_retention*100:.0f}%"
+                )
+                created_schedules.append({
+                    "id": str(dialect_schedule.id),
+                    "domain": "dialect",
+                    "scheduled_at": schedule.dialect_review_datetime.isoformat(),
+                    "hours_from_now": schedule.dialect_review_hours,
+                    "label": self.calculator.format_hours_to_human_readable(schedule.dialect_review_hours)
+                })
+        
         return {
             "user_id": str(user_id),
             "target_retention": target_retention,
             "created_count": len(created_schedules),
+            "skipped_count": skipped_count,
             "schedules": created_schedules
         }
     

@@ -171,9 +171,14 @@ class ScheduleAutoCreateView(APIView):
     "user_id": "uuid",
     "k_cs": 0.05,
     "k_dialect": 0.12,
-    "target_retention": 0.8
+    "target_retention": 0.8,
+    "cs_node_ids": ["node-uuid-1", "node-uuid-2"],
+    "dialect_node_ids": ["node-uuid-3"]
 }
 ```
+
+### 중복 방지
+- 이미 PENDING 상태의 스케줄이 있는 노드는 새로 생성하지 않습니다.
 
 ### 응답
 - 도메인별 복습 예정 시각과 시간 라벨 반환
@@ -186,6 +191,8 @@ class ScheduleAutoCreateView(APIView):
                     'k_cs': {'type': 'number', 'description': 'CS 도메인 망각 계수'},
                     'k_dialect': {'type': 'number', 'description': '사투리 도메인 망각 계수'},
                     'target_retention': {'type': 'number', 'default': 0.8},
+                    'cs_node_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': 'CS 도메인 노드 ID 목록'},
+                    'dialect_node_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': '사투리 도메인 노드 ID 목록'},
                 },
                 'required': ['user_id', 'k_cs', 'k_dialect']
             }
@@ -199,6 +206,8 @@ class ScheduleAutoCreateView(APIView):
         k_cs = request.data.get('k_cs')
         k_dialect = request.data.get('k_dialect')
         target_retention = request.data.get('target_retention', 0.8)
+        cs_node_ids = request.data.get('cs_node_ids', [])
+        dialect_node_ids = request.data.get('dialect_node_ids', [])
         
         if not user_id or k_cs is None or k_dialect is None:
             return Response(
@@ -212,13 +221,103 @@ class ScheduleAutoCreateView(APIView):
                 user_id=user_id,
                 k_cs=float(k_cs),
                 k_dialect=float(k_dialect),
-                target_retention=float(target_retention)
+                target_retention=float(target_retention),
+                cs_node_ids=cs_node_ids,
+                dialect_node_ids=dialect_node_ids
             )
             
             return Response(result, status=status.HTTP_201_CREATED)
             
         except Exception as e:
             logger.exception(f"Auto schedule create error: {e}")
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ScheduleListView(APIView):
+    """복습 스케줄 목록 조회 API"""
+    
+    @extend_schema(
+        tags=['Analytics'],
+        summary="복습 스케줄 목록 조회",
+        description="""
+사용자의 복습 스케줄 목록을 조회합니다. 캘린더 표시에 사용됩니다.
+
+### 필터링
+- `user_id`: 사용자 ID (필수)
+- `status`: 스케줄 상태 (기본값: PENDING)
+  - `PENDING`: 예정된 복습
+  - `COMPLETED`: 완료된 복습
+  - `MISSED`: 놓친 복습
+
+### 응답
+- 예정된 복습 목록 (시간순 정렬)
+        """,
+        parameters=[
+            OpenApiParameter('user_id', OpenApiTypes.UUID, description='사용자 ID', required=True),
+            OpenApiParameter('status', OpenApiTypes.STR, description='상태 필터 (PENDING/COMPLETED/MISSED)', default='PENDING'),
+        ],
+        responses={
+            200: {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'string', 'format': 'uuid'},
+                        'node_id': {'type': 'string', 'format': 'uuid'},
+                        'node_title': {'type': 'string'},
+                        'domain': {'type': 'string'},
+                        'scheduled_at': {'type': 'string', 'format': 'date-time'},
+                        'status': {'type': 'string'},
+                        'd_day': {'type': 'integer', 'description': '남은 일수 (음수면 지남)'}
+                    }
+                }
+            }
+        }
+    )
+    def get(self, request):
+        user_id = request.query_params.get('user_id')
+        status_filter = request.query_params.get('status', 'PENDING')
+        
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            from analytics.schedule_models import ReviewSchedule
+            from django.utils import timezone
+            
+            schedules = ReviewSchedule.objects.filter(
+                user_id=user_id,
+                status=status_filter
+            ).select_related('node').order_by('scheduled_at')
+            
+            result = []
+            now = timezone.now()
+            
+            for s in schedules:
+                # D-Day 계산
+                d_day = (s.scheduled_at.date() - now.date()).days
+                
+                result.append({
+                    "id": str(s.id),
+                    "node_id": str(s.node.id) if s.node else None,
+                    "node_title": s.node.title if s.node else f"{s.get_domain_display()} 복습",
+                    "domain": s.domain,
+                    "scheduled_at": s.scheduled_at.isoformat(),
+                    "status": s.status,
+                    "d_day": d_day,
+                    "is_overdue": s.scheduled_at < now and s.status == 'PENDING'
+                })
+                
+            return Response(result, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.exception(f"Schedule fetch error: {e}")
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -446,14 +545,31 @@ class ScheduleCompleteView(APIView):
             user.save(update_fields=['illusion_avg'])
             
             # =========================================================
-            # 다음 복습 시간 계산
+            # 다음 복습 시간 계산 및 스케줄 자동 생성
             # =========================================================
             from services.cognitive.benchmark import calculate_next_review_hours
+            from django.utils import timezone
+            from datetime import timedelta
+            
             next_review_hours = calculate_next_review_hours(
                 k=new_k,
                 target_retention=0.8,
                 alpha=user.alpha_user,
                 illusion=new_illusion
+            )
+            
+            # 다음 스케줄 DB 생성
+            next_scheduled_at = timezone.now() + timedelta(hours=next_review_hours)
+            
+            next_schedule = ReviewSchedule.objects.create(
+                user=user,
+                domain=domain,
+                scheduled_at=next_scheduled_at,
+                target_retention=0.8,
+                forgetting_k=new_k,
+                is_manual=False,
+                node=schedule.node,  # 동일한 노드(또는 개념)에 대한 반복 복습
+                note=f"반복 복습 (Count: {schedule.review_count + 1 if hasattr(schedule, 'review_count') else 1})"
             )
             
             return Response({
@@ -472,7 +588,9 @@ class ScheduleCompleteView(APIView):
                     "illusion_avg": round(new_illusion, 3)
                 },
                 "next_review": {
+                    "id": str(next_schedule.id),
                     "hours": round(next_review_hours, 2),
+                    "scheduled_at": next_scheduled_at.isoformat(),
                     "label": f"{next_review_hours:.1f}시간 후"
                 }
             }, status=status.HTTP_200_OK)
