@@ -584,7 +584,7 @@ class NodeListView(APIView):
 
 class NodeDetailView(APIView):
     """
-    GET /api/v1/knowledge/nodes/<uuid:pk>/
+    GET /api/v1/knowledge/nodes/<pk>/
     노드 상세 조회 (퀴즈 포함)
     """
     @extend_schema(
