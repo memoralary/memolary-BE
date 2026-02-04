@@ -1,11 +1,18 @@
 from django.contrib import admin
-from .models import User, TestSession, TestResult, SpeechAnalysis
+from .models import User, TestSession, TestResult, SpeechAnalysis, UserDomainStat
 from .schedule_models import ReviewSchedule, NotificationLog
+
+class UserDomainStatInline(admin.TabularInline):
+    model = UserDomainStat
+    extra = 0
+    fields = ('domain', 'alpha', 'forgetting_k', 'updated_at')
+    readonly_fields = ('updated_at',)
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     list_display = ('username', 'alpha_user', 'base_forgetting_k', 'created_at')
     search_fields = ('username',)
+    inlines = [UserDomainStatInline]
 
 @admin.register(ReviewSchedule)
 class ReviewScheduleAdmin(admin.ModelAdmin):

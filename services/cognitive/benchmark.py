@@ -1003,6 +1003,17 @@ class CognitiveBenchmark:
         user.base_forgetting_k = base_k
         user.update_illusion_avg()
         user.save(update_fields=['base_forgetting_k'])
+
+        # 도메인별 통계 저장 (New Feature)
+        # 1. CS 도메인
+        cs_stat = user.get_domain_stat(Domain.CS.value)
+        cs_stat.forgetting_k = cs_analysis.forgetting_k
+        cs_stat.save()
+
+        # 2. 사투리 도메인
+        dialect_stat = user.get_domain_stat(Domain.DIALECT.value)
+        dialect_stat.forgetting_k = dialect_analysis.forgetting_k
+        dialect_stat.save()
         
         return BenchmarkResult(
             user_id=user_id,
