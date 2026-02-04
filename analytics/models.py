@@ -179,6 +179,11 @@ class UserDomainStat(models.Model):
         verbose_name='망각 상수',
         help_text='해당 도메인의 망각 상수'
     )
+    illusion = models.FloatField(
+        default=0.0,
+        verbose_name='메타인지 착각 계수',
+        help_text='양수면 과신, 음수면 불신 (M)'
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

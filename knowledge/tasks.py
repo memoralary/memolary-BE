@@ -411,6 +411,47 @@ def process_ingestion(
         })
 
         # =================================================================
+        # 8단계: 클러스터 네이밍 (자동)
+        # =================================================================
+        self.update_state(state='PROGRESS', meta={'step': 8, 'message': '클러스터 이름 생성 중...'})
+        
+        try:
+            from services.knowledge.cluster_naming import ClusterNamingService
+            
+            naming_service = ClusterNamingService()
+            naming_results = naming_service.batch_generate_names(min_nodes=5)
+            
+            success_count = sum(1 for r in naming_results if r.success)
+            
+            result["steps"].append({
+                "step": 8,
+                "name": "Cluster Naming",
+                "success": True,
+                "clusters_named": success_count,
+                "details": [
+                    {"id": r.cluster_id, "name": r.name} 
+                    for r in naming_results if r.success
+                ]
+            })
+            
+        except ImportError:
+            # openai 패키지 없음 등
+            result["steps"].append({
+                "step": 8,
+                "name": "Cluster Naming",
+                "success": False,
+                "error": "OpenAI library not installed"
+            })
+        except Exception as e:
+            logger.warning(f"클러스터 네이밍 단계 실패: {e}")
+            result["steps"].append({
+                "step": 8,
+                "name": "Cluster Naming",
+                "success": False,
+                "error": str(e)
+            })
+
+        # =================================================================
         # 완료
         # =================================================================
         result["status"] = "completed"

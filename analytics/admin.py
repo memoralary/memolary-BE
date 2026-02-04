@@ -5,7 +5,7 @@ from .schedule_models import ReviewSchedule, NotificationLog
 class UserDomainStatInline(admin.TabularInline):
     model = UserDomainStat
     extra = 0
-    fields = ('domain', 'alpha', 'forgetting_k', 'updated_at')
+    fields = ('domain', 'alpha', 'forgetting_k', 'illusion', 'updated_at')
     readonly_fields = ('updated_at',)
 
 @admin.register(User)
