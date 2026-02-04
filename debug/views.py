@@ -620,15 +620,12 @@ class ResetView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Clear
-        clear_view = ClearDataView()
-        clear_request = request._request
-        clear_request.data = {'target': 'all', 'confirm': True}
-        
-        from knowledge.models import KnowledgeNode, KnowledgeEdge
+        # 1. Clear Data
+        from knowledge.models import KnowledgeNode, KnowledgeEdge, KnowledgeQuiz
         from analytics.models import User, TestSession, TestResult
         
-        cleared = {
+        deleted_counts = {
+            'quizzes': KnowledgeQuiz.objects.count(),
             'test_results': TestResult.objects.count(),
             'sessions': TestSession.objects.count(),
             'users': User.objects.count(),
@@ -636,23 +633,94 @@ class ResetView(APIView):
             'nodes': KnowledgeNode.objects.count(),
         }
         
+        # Cascade 삭제가 일어나지만 명시적으로 호출
+        KnowledgeQuiz.objects.all().delete()
         TestResult.objects.all().delete()
         TestSession.objects.all().delete()
         User.objects.all().delete()
         KnowledgeEdge.objects.all().delete()
         KnowledgeNode.objects.all().delete()
         
-        # Seed
-        seed_view = SeedDataView()
-        seed_request = request
-        seed_request.data = {'include_users': True, 'include_edges': True, 'user_count': 3}
-        seed_response = seed_view.post(seed_request)
+        # 2. Seed Data
+        from knowledge.models import TrackType, RelationType
         
-        logger.warning(f"[Reset] 전체 초기화 완료")
+        seed_stats = {
+            "nodes_created": 0,
+            "edges_created": 0,
+            "users_created": 0,
+            "sessions_created": 0,
+        }
+        
+        created_nodes = []
+        
+        # CS 노드 생성
+        for node_data in SeedDataView.CS_SAMPLE_NODES:
+            node, created = KnowledgeNode.objects.get_or_create(
+                title=node_data["title"],
+                defaults={
+                    "description": node_data["description"],
+                    "tags": node_data["tags"],
+                    "track_type": TrackType.TRACK_A,
+                }
+            )
+            if created:
+                seed_stats["nodes_created"] += 1
+                created_nodes.append(node)
+                
+        # Dialect 노드 생성
+        for node_data in SeedDataView.DIALECT_SAMPLE_NODES:
+            node, created = KnowledgeNode.objects.get_or_create(
+                title=node_data["title"],
+                defaults={
+                    "description": node_data["description"],
+                    "tags": node_data["tags"],
+                    "track_type": TrackType.TRACK_B,
+                }
+            )
+            if created:
+                seed_stats["nodes_created"] += 1
+                created_nodes.append(node)
+                
+        # Edges 생성
+        if len(created_nodes) >= 2:
+            for i in range(len(created_nodes) - 1):
+                _, created = KnowledgeEdge.objects.get_or_create(
+                    source=created_nodes[i],
+                    target=created_nodes[i + 1],
+                    relation_type=RelationType.PREREQUISITE,
+                    defaults={"confidence": 0.8, "is_prerequisite": True}
+                )
+                if created:
+                    seed_stats["edges_created"] += 1
+                    
+        # Users & Sessions 생성
+        target_user_count = 3
+        for i in range(target_user_count):
+            user, created = User.objects.get_or_create(
+                username=f"test_user_{i+1}",
+                defaults={
+                    "alpha_user": random.uniform(0.8, 1.2),
+                    "base_forgetting_k": random.uniform(0.3, 0.7),
+                }
+            )
+            if created:
+                seed_stats["users_created"] += 1
+                
+                # Sessions
+                now = timezone.now()
+                for tp, minutes in [('T0', 0), ('T1', 10), ('T2', 60), ('T3', 1440)]:
+                    TestSession.objects.get_or_create(
+                        user=user,
+                        time_point=tp,
+                        defaults={"scheduled_at": now + timedelta(minutes=minutes)}
+                    )
+                    seed_stats["sessions_created"] += 1
+
+        logger.warning(f"[Reset] 전체 초기화 완료: {deleted_counts}")
         
         return Response({
-            "cleared": cleared,
-            "seeded": seed_response.data,
+            "cleared": deleted_counts,
+            "seeded": seed_stats,
             "message": "전체 초기화 완료",
         }, status=status.HTTP_200_OK)
 
