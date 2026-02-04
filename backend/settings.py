@@ -52,10 +52,12 @@ INSTALLED_APPS = [
     # 우리가 만든 앱 추가
     'knowledge',
     'analytics',
+    'users',
     'debug',  # 디버깅 API
     
     # 향후 API 개발을 위해 미리 추가
     'rest_framework',
+    'rest_framework.authtoken',
     'corsheaders',
     
     # API 문서화
@@ -158,6 +160,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # =============================================================================
 
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ],
