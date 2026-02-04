@@ -36,6 +36,66 @@ class RelationType(models.TextChoices):
 
 
 # =============================================================================
+# [1] 클러스터 모델 (Cluster Metadata)
+# =============================================================================
+
+class KnowledgeCluster(models.Model):
+    """
+    지식 클러스터 메타데이터
+    
+    클러스터링 알고리즘에 의해 생성된 클러스터의 이름, 키워드 등을 저장합니다.
+    클러스터 이름은 LLM에 의해 자동 생성됩니다.
+    """
+    cluster_id = models.CharField(
+        max_length=100, 
+        primary_key=True,
+        verbose_name='클러스터 ID',
+        help_text='클러스터 고유 식별자'
+    )
+    name = models.CharField(
+        max_length=255, 
+        blank=True, 
+        default='',
+        verbose_name='클러스터 이름',
+        help_text='LLM이 생성한 클러스터 이름'
+    )
+    keywords = models.JSONField(
+        default=list, 
+        blank=True,
+        verbose_name='핵심 키워드',
+        help_text='클러스터의 핵심 키워드 리스트'
+    )
+    node_count = models.IntegerField(
+        default=0,
+        verbose_name='노드 수',
+        help_text='클러스터에 속한 노드 개수'
+    )
+    is_named = models.BooleanField(
+        default=False,
+        verbose_name='이름 생성 완료',
+        help_text='LLM에 의해 이름이 생성되었는지 여부'
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        verbose_name='생성 시각'
+    )
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        verbose_name='수정 시각'
+    )
+
+    class Meta:
+        verbose_name = '지식 클러스터'
+        verbose_name_plural = '지식 클러스터 목록'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        if self.name:
+            return f"{self.cluster_id}: {self.name}"
+        return f"{self.cluster_id} (미명명)"
+
+
+# =============================================================================
 # [2] 지식 노드 모델 (3D Knowledge Graph Nodes)
 # =============================================================================
 
