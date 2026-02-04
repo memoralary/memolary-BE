@@ -853,3 +853,24 @@ class QuickBenchmarkView(APIView):
         result["message"] = f"벤치마크 테스트 데이터 생성 완료"
         
         return Response(result, status=status.HTTP_201_CREATED)
+
+
+class MigrateView(APIView):
+    """DB 마이그레이션 수동 실행 API"""
+    
+    @extend_schema(
+        tags=['Debug'],
+        summary="DB 마이그레이션 실행",
+        description="django migrate 명령어를 수동으로 실행합니다.",
+        responses={200: {'type': 'object', 'properties': {'status': {'type': 'string'}}}}
+    )
+    def post(self, request):
+        from django.core.management import call_command
+        import io
+        
+        try:
+            out = io.StringIO()
+            call_command('migrate', interactive=False, stdout=out)
+            return Response({"status": "success", "output": out.getvalue()}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
