@@ -133,6 +133,65 @@ class User(models.Model):
         else:
             return '균형 (Calibrated)'
 
+    def get_domain_stat(self, domain: str):
+        """
+        특정 도메인의 통계 정보 반환 (없으면 생성)
+        
+        Args:
+            domain: 도메인 식별자 (cs, dialect 등)
+        Returns:
+            UserDomainStat 객체
+        """
+        stat, created = self.domain_stats.get_or_create(
+            domain=domain,
+            defaults={
+                'alpha': self.alpha_user,
+                'forgetting_k': self.base_forgetting_k
+            }
+        )
+        return stat
+
+
+class UserDomainStat(models.Model):
+    """
+    사용자 도메인별 학습 통계
+    
+    특정 도메인(예: CS, 사투리)에 대한 학습 지능과 망각 상수를 개별 관리합니다.
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='domain_stats',
+        verbose_name='사용자'
+    )
+    domain = models.CharField(
+        max_length=50,
+        verbose_name='도메인',
+        help_text='도메인 식별자 (cs, dialect 등)'
+    )
+    alpha = models.FloatField(
+        default=1.0,
+        verbose_name='학습 지능 계수',
+        help_text='해당 도메인의 학습 지능 계수'
+    )
+    forgetting_k = models.FloatField(
+        default=0.5,
+        verbose_name='망각 상수',
+        help_text='해당 도메인의 망각 상수'
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = '도메인별 통계'
+        verbose_name_plural = '도메인별 통계 목록'
+        unique_together = ['user', 'domain']
+        indexes = [
+            models.Index(fields=['user', 'domain']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.domain} (k={self.forgetting_k:.3f})"
+
 
 # =============================================================================
 # [4] 테스트 세션 모델 (Time-series axis)
