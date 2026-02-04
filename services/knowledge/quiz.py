@@ -34,6 +34,15 @@ SYSTEM_PROMPT = """너는 컴퓨터 과학 및 인지과학 분야의 전문가�
 }
 """
 
+from pydantic import BaseModel, Field
+from typing import List
+
+class QuizSchema(BaseModel):
+    question: str
+    options: List[str]
+    answer_index: int
+    explanation: str = ""
+
 class QuizGenerator:
     """지식 노드 기반 퀴즈 생성기"""
     
@@ -64,23 +73,18 @@ class QuizGenerator:
                 user_prompt=user_prompt
             )
             
-            # JSON 파싱
-            quiz_data = safe_json_parse(response_text)
+            # JSON 파싱 (Pydantic 모델 사용)
+            quiz_model = safe_json_parse(response_text, QuizSchema)
             
-            if not quiz_data:
-                logger.error("퀴즈 생성 실패: JSON 파싱 에러")
+            if not quiz_model:
+                logger.error("퀴즈 생성 실패: 파싱 결과 없음")
                 raise ValueError("LLM 응답을 파싱할 수 없습니다.")
             
-            # 필수 필드 확인
-            required_keys = ['question', 'options', 'answer_index', 'explanation']
-            for key in required_keys:
-                if key not in quiz_data:
-                    raise ValueError(f"필수 필드 누락: {key}")
+            # Pydantic 모델 -> Dict 변환
+            quiz_data = quiz_model.model_dump()
             
             return quiz_data
             
         except Exception as e:
             logger.error(f"퀴즈 생성 중 오류 발생 ({node.title}): {e}")
-            # 폴백(Fallback) 또는 에러 재발생
-            # 간단한 더미 데이터라도 줄지, 에러를 낼지 결정. API 에러가 나은 선택.
             raise e
