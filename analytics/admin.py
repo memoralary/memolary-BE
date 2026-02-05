@@ -1,6 +1,6 @@
 from django.contrib import admin
 from .models import User, TestSession, TestResult, SpeechAnalysis, UserDomainStat
-from .schedule_models import ReviewSchedule, NotificationLog
+from .schedule_models import ReviewSchedule, NotificationLog, PushSubscription
 
 class UserDomainStatInline(admin.TabularInline):
     model = UserDomainStat
@@ -24,6 +24,11 @@ class ReviewScheduleAdmin(admin.ModelAdmin):
 class TestResultAdmin(admin.ModelAdmin):
     list_display = ('node', 'is_correct', 'confidence_score', 'response_time_ms', 'test_type')
     list_filter = ('is_correct', 'test_type')
+
+@admin.register(PushSubscription)
+class PushSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'user_agent', 'created_at', 'last_used_at')
+    search_fields = ('user__username', 'endpoint')
 
 admin.site.register(TestSession)
 admin.site.register(SpeechAnalysis)
