@@ -1,6 +1,87 @@
 # ET Project
 
 ET는 지식 그래프와 인지 과학을 결합한 개인화 학습/복습 플랫폼입니다.
+사용자의 학습 상태를 추적하고, 최적의 복습 시점과 개인화된 학습 경로를 추천합니다.
+
+---
+
+## ⚙️ Technology Stack
+
+| Category | Technologies |
+| :--- | :--- |
+| **Backend** | Python 3.12, Django 5.0, Django REST Framework |
+| **Database** | SQLite (Dev), Redis 5.0+ (Caching & Celery Broker) |
+| **AI / ML** | PyTorch (CPU), Sentence Transformers, UMAP, Scikit-learn |
+| **LLM** | OpenAI API (GPT-4o / GPT-3.5) |
+| **Task Queue** | Celery, RabbitMQ/Redis |
+| **DevOps** | Nginx, Gunicorn, Systemd |
+
+---
+
+## 🚀 Getting Started
+
+프로젝트를 로컬 환경에서 실행하는 방법입니다.
+
+### 1. Prerequisites (사전 준비)
+*   **Python 3.10+** (3.12 권장)
+*   **Redis** (Celery 비동기 작업용)
+    ```bash
+    # Mac (Homebrew)
+    brew install redis
+    brew services start redis
+    ```
+
+### 2. Installation (설치)
+
+1. **Repository Clone**
+   ```bash
+   git clone <repository-url>
+   cd backend
+   ```
+
+2. **Virtual Environment Setup**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Windows: venv\Scripts\activate
+   ```
+
+3. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Environment Variables (.env)**
+   프로젝트 루트(`backend/`)에 `.env` 파일을 생성하고 아래 내용을 작성하세요.
+   ```ini
+   # Django
+   SECRET_KEY=development_secret_key
+   DEBUG=True
+   ALLOWED_HOSTS=*
+
+   # OpenAI (Required for Knowledge Extraction)
+   OPENAI_API_KEY=sk-your-openai-api-key
+
+   # Redis
+   REDIS_URL=redis://localhost:6379/0
+   ```
+
+5. **Database Migration**
+   ```bash
+   python manage.py migrate
+   ```
+
+### 3. Running Locally (실행)
+
+**1. Django Server**
+```bash
+python manage.py runserver
+```
+
+**2. Celery Worker (비동기 작업 처리)**
+별도의 터미널에서 실행하세요.
+```bash
+celery -A backend worker --loglevel=info
+```
 
 ---
 
