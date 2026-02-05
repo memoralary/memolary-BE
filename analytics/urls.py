@@ -26,6 +26,7 @@ from analytics.views import (
     BenchmarkSubmitView,
     BenchmarkAnalyzeView,
     BenchmarkStatusView,
+    UserAnalysisResultView,
 )
 from analytics.schedule_views import (
     ScheduleListView,
@@ -46,6 +47,7 @@ urlpatterns = [
     path('benchmark/submit/', BenchmarkSubmitView.as_view(), name='benchmark-submit'),
     path('benchmark/analyze/', BenchmarkAnalyzeView.as_view(), name='benchmark-analyze'),
     path('benchmark/status/<str:user_id>/', BenchmarkStatusView.as_view(), name='benchmark-status'),
+    path('results/<str:user_id>/', UserAnalysisResultView.as_view(), name='user-analysis-result'),
     
     # 복습 스케줄 API
     path('schedules/', ScheduleListView.as_view(), name='schedule-list'),

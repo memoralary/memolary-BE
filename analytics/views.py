@@ -510,3 +510,120 @@ class BenchmarkStatusView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+class UserAnalysisResultView(APIView):
+    """사용자 ID 기반 분석 결과 조회 API"""
+    
+    @extend_schema(
+        tags=['Analytics'],
+        summary="사용자 분석 결과 조회",
+        description="""
+        사용자의 현재 학습 상태(망각 계수, 인지 특성)와 망각 곡선 데이터를 조회합니다.
+        저장된 UserDomainStat 정보를 바탕으로 시각화 데이터를 생성하여 반환합니다.
+        """,
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                type=OpenApiTypes.UUID,
+                location=OpenApiParameter.PATH,
+                description='사용자 ID'
+            )
+        ],
+        responses={
+            200: {
+                'type': 'object',
+                'properties': {
+                    'summary': {
+                        'type': 'object',
+                        'properties': {
+                            'k_mean': {'type': 'number'},
+                            'alpha_mean': {'type': 'number'},
+                            'illusion_mean': {'type': 'number'},
+                            'user_alias': {'type': 'string'}
+                        }
+                    },
+                    'domain_stats': {
+                        'type': 'object',
+                        'properties': {
+                            'cs': {'type': 'object'},
+                            'dialect': {'type': 'object'}
+                        }
+                    },
+                    'forgetting_curve': {
+                        'type': 'object',
+                        'properties': {
+                            'cs': {'type': 'array'},
+                            'dialect': {'type': 'array'}
+                        }
+                    }
+                }
+            },
+            404: {'description': '사용자를 찾을 수 없음'}
+        }
+    )
+    def get(self, request, user_id):
+        from services.cognitive.benchmark import ForgettingCurveGenerator
+        
+        try:
+            user = User.objects.get(id=user_id)
+            
+            # 도메인별 통계 조회
+            cs_stat = user.get_domain_stat('cs')
+            dialect_stat = user.get_domain_stat('dialect')
+            
+            # 망각 곡선 데이터 생성
+            curve_gen = ForgettingCurveGenerator()
+            curve_data = curve_gen.to_dict(
+                k_cs=cs_stat.forgetting_k,
+                k_dialect=dialect_stat.forgetting_k
+            )
+            
+            # 평균값 계산
+            k_mean = (cs_stat.forgetting_k + dialect_stat.forgetting_k) / 2
+            alpha_mean = (cs_stat.alpha + dialect_stat.alpha) / 2
+            illusion_mean = user.illusion_avg
+            
+            # 별칭(Alias) 생성 (메타인지 성향 기반)
+            alias = "학습자"
+            if illusion_mean > 0.1:
+                alias = "자신감 넘치는 탐험가"
+            elif illusion_mean < -0.1:
+                alias = "신중한 분석가"
+            else:
+                alias = "냉철한 전략가"
+            
+            if k_mean < 0.1:
+                alias = f"기억의 마법사 ({alias})"
+            
+            return Response({
+                "summary": {
+                    "k_mean": round(k_mean, 4),
+                    "alpha_mean": round(alpha_mean, 2),
+                    "illusion_mean": round(illusion_mean, 3),
+                    "user_alias": alias
+                },
+                "domain_stats": {
+                    "cs": {
+                        "k": cs_stat.forgetting_k,
+                        "alpha": cs_stat.alpha,
+                        "illusion": cs_stat.illusion
+                    },
+                    "dialect": {
+                        "k": dialect_stat.forgetting_k,
+                        "alpha": dialect_stat.alpha,
+                        "illusion": dialect_stat.illusion
+                    }
+                },
+                "forgetting_curve": curve_data
+            }, status=status.HTTP_200_OK)
+            
+        except User.DoesNotExist:
+            return Response(
+                {"error": f"User not found: {user_id}"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.exception(f"Analysis result fetch error: {e}")
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
