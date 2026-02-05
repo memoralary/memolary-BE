@@ -26,6 +26,7 @@ urlpatterns = [
     path("api/v1/knowledge/", include("knowledge.urls")),
     path("api/v1/analytics/", include("analytics.urls")),
     path("api/v1/debug/", include("debug.urls")),  # 디버깅 API
+    path("api/v1/auth/", include("users.urls")),   # 인증 API
     path("api/v1/universe/", UniverseView.as_view(), name="universe"),
     path("api/v1/tasks/<str:task_id>/", TaskStatusView.as_view(), name="task-status"),
 

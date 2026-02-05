@@ -682,30 +682,36 @@ class ClusterNodeListView(APIView):
         }
     )
     def get(self, request):
-        clusters = KnowledgeCluster.objects.all()
-        nodes = KnowledgeNode.objects.values('id', 'title', 'cluster_id')
-        
-        # Group nodes by cluster_id
-        nodes_by_cluster = {}
-        for node in nodes:
-            cid = node['cluster_id']
-            if cid:
-                if cid not in nodes_by_cluster:
-                    nodes_by_cluster[cid] = []
-                nodes_by_cluster[cid].append({
-                    "id": str(node['id']),
-                    "title": node['title']
+        try:
+            logger.info("[ClusterList] Fetching clusters and nodes...")
+            clusters = KnowledgeCluster.objects.all()
+            nodes = KnowledgeNode.objects.values('id', 'title', 'cluster_id')
+            
+            # Group nodes by cluster_id
+            nodes_by_cluster = {}
+            for node in nodes:
+                cid = node['cluster_id']
+                if cid:
+                    if cid not in nodes_by_cluster:
+                        nodes_by_cluster[cid] = []
+                    nodes_by_cluster[cid].append({
+                        "id": str(node['id']),
+                        "title": node['title']
+                    })
+            
+            result = []
+            for cluster in clusters:
+                result.append({
+                    "cluster_id": cluster.cluster_id,
+                    "cluster_name": cluster.name,
+                    "nodes": nodes_by_cluster.get(cluster.cluster_id, [])
                 })
-        
-        result = []
-        for cluster in clusters:
-            result.append({
-                "cluster_id": cluster.cluster_id,
-                "cluster_name": cluster.name,
-                "nodes": nodes_by_cluster.get(cluster.cluster_id, [])
-            })
-        
-        return Response(result)
+            
+            logger.info(f"[ClusterList] Returning {len(result)} clusters.")
+            return Response(result)
+        except Exception as e:
+            logger.exception(f"[ClusterList] Error: {e}")
+            raise e
 
 
 class RecommendView(APIView):
