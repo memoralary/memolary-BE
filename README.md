@@ -14,7 +14,7 @@ ET는 지식 그래프와 인지 과학을 결합한 개인화 학습/복습 플
 | **AI / ML** | PyTorch (CPU), Sentence Transformers, UMAP, Scikit-learn |
 | **LLM** | OpenAI API (GPT-4o / GPT-3.5) |
 | **Task Queue** | Celery, RabbitMQ/Redis |
-| **DevOps** | Nginx, Gunicorn, Systemd |
+| **DevOps** | Gunicorn, Systemd |
 
 ---
 
